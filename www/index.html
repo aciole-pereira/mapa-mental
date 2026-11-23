@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#E6E6E6">
+<meta name="description" content="Mapas mentais com a estética de programação visual por nós e fios.">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Mapa Mental">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+<title>Mapa Mental</title>
+</head>
+<body>
+<header id="ribbon">
+  <div class="menubar">
+    <img class="logo" src="icons/icon.svg" alt="">
+    <nav id="menus" class="menus" aria-label="Menus"></nav>
+    <span class="sp"></span>
+    <span id="peers" class="peers"></span>
+    <span id="saveState">Salvo</span>
+    <span id="roleBadge" class="rolebadge" hidden></span>
+    <button id="commentsBtn" class="tb2" hidden title="Comentários">💬 <b></b></button>
+    <button id="shareBtn" class="tb2" hidden>Compartilhar</button>
+    <button id="accountBtn" class="tb2" hidden>Entrar</button>
+    <button id="installBtn" class="tb-btn" hidden>Instalar app</button>
+    <div class="docname">
+      <input id="mapName" type="text" spellcheck="false" aria-label="Nome do mapa" maxlength="80">
+      <button class="docdrop" data-cmd="open" title="Meus mapas" aria-label="Meus mapas">▾</button>
+    </div>
+  </div>
+  <nav id="tabs" class="tabs"></nav>
+  <div id="panels" class="panels"></div>
+  <div id="canvasbar" class="canvasbar">
+    <div id="quickL" class="quick"></div>
+    <select id="zoomSel" class="zoomsel" aria-label="Zoom"></select>
+    <div id="quickM" class="quick"></div>
+    <span class="sp"></span>
+    <div id="quickR" class="quick"></div>
+  </div>
+</header>
+
+<main id="stage">
+  <canvas id="canvas"></canvas>
+  <textarea id="editor" spellcheck="false" autocapitalize="sentences"></textarea>
+  <div id="search" role="dialog" aria-label="Criar objeto">
+    <input type="text" placeholder="Digite o texto e pressione Enter…" autocomplete="off" spellcheck="false">
+    <ul></ul>
+  </div>
+  <div id="ctxmenu" class="menu" role="menu"></div>
+  <button id="fab" aria-label="Nova ideia">+</button>
+  <div id="toast" role="status"></div>
+  <div id="findbar" class="floatbar" hidden>
+    <input type="search" placeholder="Buscar no mapa…" aria-label="Buscar no mapa">
+    <span class="cnt"></span>
+    <button data-f="prev" title="Anterior (Shift+Enter)">▲</button>
+    <button data-f="next" title="Próximo (Enter)">▼</button>
+    <button data-f="close" title="Fechar (Esc)">×</button>
+  </div>
+  <div id="penbar" class="floatbar" hidden></div>
+  <div id="votebar" class="floatbar" hidden></div>
+  <div id="timer" class="floatbar" hidden>
+    <span class="time" title="Pausar / continuar">00:00</span>
+    <button data-t="pause" title="Pausar / continuar">⏸</button>
+    <button data-t="close" title="Fechar timer">×</button>
+  </div>
+  <aside id="comments" class="cmpanel" hidden>
+    <header><strong>Comentários</strong>
+      <span class="cf"><button data-cf="open">Abertos</button><button data-cf="all">Todos</button><button data-cf="me">@Você</button></span>
+      <button data-cx class="x" aria-label="Fechar">×</button></header>
+    <div class="cmlist"></div>
+    <div class="cmnew">
+      <button class="cmtarget" title="Clique para comentar no mapa todo"></button>
+      <div class="cmbox">
+        <textarea id="cmText" rows="3" placeholder="Escreva um comentário… use @ para mencionar"></textarea>
+        <div id="cmMention" class="cmmention" hidden></div>
+      </div>
+      <div class="row-end" style="gap:8px;align-items:center"><small class="muted">Ctrl+Enter envia</small><button class="btn primary" id="cmSend">Enviar</button></div>
+    </div>
+  </aside>
+  <div id="aibar" class="floatbar" hidden>
+    <span class="spin" aria-hidden="true"></span>
+    <span class="lbl">IA trabalhando…</span>
+    <button data-ai="cancel" title="Cancelar o pedido">Cancelar</button>
+  </div>
+  <div id="presentbar" class="floatbar" hidden>
+    <button data-p="prev" title="Anterior (←)">◀</button>
+    <span class="cnt"></span>
+    <button data-p="next" title="Próximo (→ ou clique)">▶</button>
+    <button data-p="close" title="Sair (Esc)">Sair</button>
+  </div>
+</main>
+
+<footer id="statusbar">
+  <span id="stCount"></span>
+  <span id="stSel"></span>
+  <span class="sp"></span>
+  <span id="stHint">Duplo clique no fundo para criar · arraste das bolinhas para conectar</span>
+  <span id="stZoom">100%</span>
+</footer>
+
+<div id="drawer" class="overlay" hidden>
+  <div class="sheet">
+    <header><strong>Meus mapas</strong><button class="x" data-close aria-label="Fechar">×</button></header>
+    <div class="list"></div>
+    <footer>
+      <button class="btn primary" data-cmd="new">Novo mapa</button>
+      <button class="btn" data-cmd="import">Importar arquivo…</button>
+    </footer>
+  </div>
+</div>
+
+<div id="modal" class="overlay" hidden>
+  <div class="sheet small">
+    <header><strong id="modalTitle"></strong><button class="x" data-close aria-label="Fechar">×</button></header>
+    <div id="modalBody" class="body"></div>
+  </div>
+</div>
+
+<div id="dropmenu" class="menu" role="menu"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+<input type="file" id="imageFile" accept="image/*" hidden>
+<input type="color" id="colorPick" style="position:fixed;left:-100px;top:0;width:1px;height:1px;opacity:0" tabindex="-1" aria-hidden="true">
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
