@@ -31,6 +31,12 @@ O app precisa ser servido por **HTTPS** para ser instalável nos celulares
 | **Android** (Chrome) | Botão **Instalar app**, ou menu ⋮ → **Instalar app** |
 | **iPhone / iPad** (Safari) | **Compartilhar** → **Adicionar à Tela de Início** |
 
+## Site publicado
+
+**https://aciole-pereira.github.io/mapa-mental/** — publicado pelo GitHub Pages
+(fluxo em `.github/workflows/pages.yml`). Para atualizar o site, basta enviar
+as mudanças: `git push` (a publicação leva cerca de 1 minuto).
+
 ## Publicar (para instalar nos celulares)
 
 Publique só a pasta `www/` em qualquer hospedagem estática com HTTPS gratuita:
