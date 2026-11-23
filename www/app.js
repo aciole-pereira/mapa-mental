@@ -1931,6 +1931,29 @@ const ptrs = new Map();
 let gesture = null, pinch = null, longTimer = null;
 let lastTap = { t: 0, x: 0, y: 0 };
 
+// ---------- Lixeira: aparece ao arrastar; soltar em cima apaga o que está sendo arrastado
+const trashEl = () => $('#trash');
+function updateTrash(p, g) {
+  const t = trashEl();
+  if (!t || presenting || !g.starts || !g.starts.size) return;
+  t.hidden = false;
+  const tr = t.getBoundingClientRect(), cr = canvas.getBoundingClientRect();
+  const cx = tr.left + tr.width / 2 - cr.left, cy = tr.top + tr.height / 2 - cr.top;
+  g.overTrash = dist(p.x, p.y, cx, cy) <= Math.max(tr.width, 56) * 0.85;
+  t.classList.toggle('hot', g.overTrash);
+}
+function hideTrash() { const t = trashEl(); if (t) { t.hidden = true; t.classList.remove('hot'); } }
+function dropInTrash(g) {
+  const ids = new Set(g.starts.keys());
+  // volta tudo para o lugar original: o Ctrl+Z restaura o estado de antes do arraste
+  for (const [id, st] of g.starts) { const n = byId(id); if (n) { n.x = st.x; n.y = st.y; } }
+  doc.nodes = doc.nodes.filter(n => !ids.has(n.id));
+  doc.wires = doc.wires.filter(w => !ids.has(w.from) && !ids.has(w.to));
+  sel.clear(); selWire = null;
+  changed();
+  if (navigator.vibrate) navigator.vibrate(15);
+  toast(`${ids.size} ${ids.size > 1 ? 'objetos apagados' : 'objeto apagado'} — Ctrl+Z desfaz`);
+}
 function boxRect(g) {
   return { x: Math.min(g.wx, g.cur.x), y: Math.min(g.wy, g.cur.y), w: Math.abs(g.cur.x - g.wx), h: Math.abs(g.cur.y - g.wy) };
 }
@@ -2048,6 +2071,7 @@ canvas.addEventListener('pointermove', e => {
       }
       for (const [id, s] of g.starts) { const n = byId(id); if (n) { n.x = s.x + ddx; n.y = s.y + ddy; } }
       broadcastMove(g.starts);
+      updateTrash(p, g);
       break;
     }
     case 'resize': {
@@ -2091,6 +2115,7 @@ function endPointer(e, cancelled) {
   gesture = null;
   const w = toWorld(p.x, p.y);
   if (cancelled) {
+    hideTrash();
     if (g.moved && (g.mode === 'move' || g.mode === 'resize')) changed();
     return render();
   }
@@ -2098,6 +2123,8 @@ function endPointer(e, cancelled) {
   if (g.present) { if (!g.moved) goFrame(presenting.i + 1); return; }
   if (g.mode === 'vote') { if (!g.moved) castVote(g.hit.node, e.shiftKey); return; }
   if (g.button === 2 && !g.moved) return openContextMenu(p.x, p.y, g.hit, w);
+  hideTrash();
+  if (g.mode === 'move' && g.moved && g.overTrash) { dropInTrash(g); updateStatus(); return; }
   if (g.moved) {
     if (g.mode === 'move' || g.mode === 'resize') changed();
     else if (g.mode === 'pan') scheduleSave(true);
@@ -2143,6 +2170,7 @@ function updateHover(p) {
 }
 
 function startPinch() {
+  hideTrash();
   clearTimeout(longTimer);
   if (gesture && gesture.moved && (gesture.mode === 'move' || gesture.mode === 'resize')) changed();
   gesture = null;
