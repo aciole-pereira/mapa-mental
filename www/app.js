@@ -2234,16 +2234,33 @@ const KEYWORDS = {
   link: /^(link|url)\b/i,
 };
 const URL_RE = /^(https?:\/\/|www\.|mailto:)\S+$|^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(\/\S*)?$/i;
+// no celular o teclado cobre parte da tela: a busca fica "encaixada" no topo da área visível
+const vvp = window.visualViewport;
+const touchUI = matchMedia('(pointer: coarse)').matches;
+function placeSearch(p) {
+  if (searchBox.style.display !== 'block') return;
+  if (touchUI && vvp) {
+    searchBox.classList.add('docked');
+    searchBox.style.left = searchBox.style.top = '';
+    searchBox.style.top = Math.round(vvp.offsetTop + 6) + 'px';
+    const room = vvp.height - searchInput.offsetHeight - 16;
+    searchList.style.maxHeight = Math.max(90, Math.round(room)) + 'px';
+  } else if (p) {
+    const bw = searchBox.offsetWidth, bh = 200;
+    searchBox.style.left = clamp(p.x - 20, 8, W - bw - 8) + 'px';
+    searchBox.style.top = clamp(p.y - 18, 8, Math.max(8, H - bh)) + 'px';
+  }
+}
+if (vvp) ['resize', 'scroll'].forEach(ev => vvp.addEventListener(ev, () => placeSearch()));
 function openSearch(p, w) {
   hideMenus();
   searchAt = w;
   searchInput.value = '';
   searchBox.style.display = 'block';
-  const bw = searchBox.offsetWidth, bh = 200;
-  searchBox.style.left = clamp(p.x - 20, 8, W - bw - 8) + 'px';
-  searchBox.style.top = clamp(p.y - 18, 8, Math.max(8, H - bh)) + 'px';
+  placeSearch(p);
   updateSearch();
   searchInput.focus({ preventScroll: true });
+  if (touchUI) setTimeout(placeSearch, 350); // depois que o teclado terminou de subir
 }
 function updateSearch() {
   const q = searchInput.value.trim();
@@ -2270,6 +2287,7 @@ function acceptSearch() {
 }
 function closeSearch() {
   searchBox.style.display = 'none';
+  searchBox.classList.remove('docked');
   searchAt = null;
   if (document.activeElement === searchInput) canvas.focus({ preventScroll: true });
 }
