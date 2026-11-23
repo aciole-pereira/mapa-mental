@@ -37,6 +37,19 @@ O app precisa ser servido por **HTTPS** para ser instalável nos celulares
 (fluxo em `.github/workflows/pages.yml`). Para atualizar o site, basta enviar
 as mudanças: `git push` (a publicação leva cerca de 1 minuto).
 
+## Continuar em outro computador
+
+1. Instale o [Git](https://git-scm.com) e o [Node.js](https://nodejs.org).
+2. Baixe o projeto:
+   ```powershell
+   git clone https://github.com/aciole-pereira/mapa-mental.git
+   ```
+3. Entre na pasta e rode `npm start` → http://localhost:5173
+4. Abra a pasta no Claude Code: o arquivo `CLAUDE.md` traz o contexto do projeto.
+
+Os mapas ficam na nuvem (entre com a sua conta no app). A chave de IA, se usar,
+precisa ser colada de novo em cada aparelho.
+
 ## Publicar (para instalar nos celulares)
 
 Publique só a pasta `www/` em qualquer hospedagem estática com HTTPS gratuita:
