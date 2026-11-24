@@ -1,6 +1,6 @@
 // Service worker: guarda o app no aparelho para abrir sem internet.
 // Ao publicar uma nova versão, aumente o número em VERSION.
-const VERSION = 'mapa-mental-v28';
+const VERSION = 'mapa-mental-v29';
 const ASSETS = [
   './',
   'index.html',
@@ -32,7 +32,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req)
+    // no-cache: sempre pergunta ao servidor se há versão nova (o GitHub Pages deixa o navegador reutilizar arquivos por ~10 min)
+    fetch(req.mode === 'navigate' ? req.url : req, { cache: 'no-cache' })
       .then(res => {
         if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
         return res;
