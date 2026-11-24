@@ -3999,6 +3999,12 @@ async function cloudInit() {
     sessionStorage.setItem('mm.join', join);
     history.replaceState(null, '', location.pathname);
   }
+  // link de "Esqueci minha senha": o Supabase manda type=recovery na URL (e a limpa logo depois),
+  // então guardamos isso antes de criar o cliente para não depender do momento do evento
+  const hashP = new URLSearchParams(location.hash.replace(/^#/, ''));
+  if (hashP.get('type') === 'recovery' || new URLSearchParams(location.search).get('type') === 'recovery') {
+    sessionStorage.setItem('mm.recovery', '1');
+  }
   updateCloudUi();
   if (!CLOUD_ON) return;
   try {
@@ -4019,9 +4025,17 @@ async function cloudInit() {
   window.addEventListener('offline', () => { cloud.online = false; updateCloudUi(); });
 }
 
+// abre "Criar senha nova" uma única vez quando a pessoa veio do link de recuperação
+function askNewPassword() {
+  if (!sessionStorage.getItem('mm.recovery')) return;
+  sessionStorage.removeItem('mm.recovery');
+  setTimeout(() => showSetPassword(true), 400);
+}
 async function onAuth(event, session) {
   const user = session && session.user;
   const was = me && me.id;
+  if (event === 'PASSWORD_RECOVERY') sessionStorage.setItem('mm.recovery', '1');
+  const recovering = !!sessionStorage.getItem('mm.recovery');
   if (!user) {
     me = null;
     leaveChannel();
@@ -4029,8 +4043,7 @@ async function onAuth(event, session) {
     if (sessionStorage.getItem('mm.join')) showLogin('Entre para abrir o mapa que compartilharam com você.');
     return;
   }
-  if (event === 'PASSWORD_RECOVERY') setTimeout(() => showSetPassword(true), 300);
-  if (was === user.id && event !== 'USER_UPDATED') { updateCloudUi(); return; }
+  if (was === user.id && event !== 'USER_UPDATED') { updateCloudUi(); askNewPassword(); return; }
   me = { id: user.id, email: user.email, name: (user.email || '').split('@')[0] };
   const { data: prof } = await sb.from('profiles').select('display_name').eq('id', me.id).maybeSingle();
   if (prof && prof.display_name) me.name = prof.display_name;
@@ -4042,11 +4055,12 @@ async function onAuth(event, session) {
     const { data: mapId, error } = await sb.rpc('join_map_by_link', { link_token: token });
     if (error) modal('Link de compartilhamento', `<p>${esc(error.message || 'Não foi possível entrar no mapa.')}</p>`);
     else { await openCloudMap(mapId); toast('Mapa compartilhado aberto'); }
-  } else if (!was) {
+  } else if (!was && !recovering) {
     offerUpload();
     if (isCloudMap()) cloudReopen();
   }
-  checkMentions();
+  askNewPassword();
+  if (!recovering) checkMentions();
 }
 
 // ---------------------------------------------------------------- interface (botões do topo)
