@@ -1,4 +1,6 @@
 # Publica a pasta www/ no GitHub Pages a cada envio para a branch main.
+# Dois passos separados (montar e publicar) evitam a falha intermitente
+# "No artifacts named github-pages were found".
 name: Publicar no GitHub Pages
 
 on:
@@ -16,16 +18,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: www
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
