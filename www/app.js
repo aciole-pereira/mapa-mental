@@ -2006,8 +2006,25 @@ function moveSet() {
   return new Map([...ids].map(id => byId(id)).filter(n => n && !n.locked).map(n => [n.id, { x: n.x, y: n.y }]));
 }
 
+// iPhone: às vezes o "dedo levantou" (pointerup/cancel) se perde e o app fica achando que há dedos na tela
+// (parece zoom travado, e tocar no fundo não desseleciona). Aqui o estado dos dedos é restaurado.
+function resetPointers() {
+  clearTimeout(longTimer);
+  const g = gesture;
+  if (g && g.moved && (g.mode === 'move' || g.mode === 'resize')) changed();
+  hideTrash();
+  ptrs.clear(); pinch = null; gesture = null;
+  render();
+}
+document.addEventListener('touchend', e => { if (!e.touches.length) setTimeout(() => { if (ptrs.size) resetPointers(); }, 80); }, { passive: true });
+document.addEventListener('touchcancel', e => { if (!e.touches.length) setTimeout(() => { if (ptrs.size) resetPointers(); }, 80); }, { passive: true });
+window.addEventListener('blur', () => { if (ptrs.size) resetPointers(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && ptrs.size) resetPointers(); });
+canvas.addEventListener('lostpointercapture', e => { if (e.pointerType !== 'mouse') setTimeout(() => { if (ptrs.has(e.pointerId)) endPointer(e, true); }, 80); });
 canvas.addEventListener('pointerdown', e => {
   hideMenus();
+  // um toque "primário" é sempre o primeiro dedo: se ainda há dedos registrados, são restos de um toque que se perdeu
+  if (e.isPrimary && e.pointerType !== 'mouse' && ptrs.size) resetPointers();
   if (editing) commitEdit();
   canvas.focus({ preventScroll: true });
   try { canvas.setPointerCapture(e.pointerId); } catch {}
