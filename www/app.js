@@ -1,3 +1,11 @@
+// Fio no estilo do Grasshopper: sai da saída e chega na entrada sempre na horizontal, em curva suave.
+// Quanto mais "para trás" ou mais desalinhado verticalmente, mais a curva abre (como no Grasshopper).
+function curve(p0, p3) {
+  const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
+  const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
+  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.5, 0.7 * ady * (1 - forward));
+  return [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
+}
 'use strict';
 (() => {
 // =====================================================================
@@ -1287,12 +1295,10 @@ function draw() {
     let p;
     if (gs.side === 'out') {
       const p0 = gripOut(gs.node, gs.idx), p3 = t ? gripIn(t, gs.tidx) : gs.cur;
-      const d = Math.max(30, Math.abs(p3.x - p0.x) * 0.5);
-      p = [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
+      p = curve(p0, p3);
     } else {
       const p3 = gripIn(gs.node, gs.idx), p0 = t ? gripOut(t, gs.tidx) : gs.cur;
-      const d = Math.max(30, Math.abs(p3.x - p0.x) * 0.5);
-      p = [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
+      p = curve(p0, p3);
     }
     ctx.beginPath();
     ctx.moveTo(p[0].x, p[0].y);
