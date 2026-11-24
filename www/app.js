@@ -4336,7 +4336,14 @@ async function cloudList() {
 async function openCloudMap(id) {
   if (!sb || !me) return false;
   const { data, error } = await sb.from('maps').select('id,name,owner,data,updated_at').eq('id', id).maybeSingle();
-  if (error || !data) { toast('Não foi possível abrir o mapa da nuvem'); return false; }
+  if (error || !data) {
+    // mostra o motivo real e, se o mapa é seu e ainda não chegou na nuvem, tenta enviar a cópia do aparelho
+    const why = error ? (error.message || error.code || 'erro de rede') : 'mapa ainda não está na nuvem';
+    console.warn('openCloudMap', id, error || 'sem linha');
+    toast('Não foi possível abrir o mapa da nuvem: ' + String(why).slice(0, 90));
+    if (!error && doc && doc.id === id && doc.role === 'owner') { doc.dirty = doc.dirty || Date.now(); scheduleCloudSave(); }
+    return false;
+  }
   let role = 'owner';
   if (data.owner !== me.id) {
     const { data: mm } = await sb.from('map_members').select('role').eq('map_id', id).eq('user_id', me.id).maybeSingle();

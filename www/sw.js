@@ -1,6 +1,6 @@
 // Service worker: guarda o app no aparelho para abrir sem internet.
 // Ao publicar uma nova versão, aumente o número em VERSION.
-const VERSION = 'mapa-mental-v23';
+const VERSION = 'mapa-mental-v24';
 const ASSETS = [
   './',
   'index.html',
