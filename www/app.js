@@ -1898,7 +1898,7 @@ function commitEdit() {
     const v = editor.value.replace(/\s+/g, ' ').trim().slice(0, 20);
     portList(node, field.side)[field.idx] = v;
     measure(node);
-    if (isNew && !v) { restore(past.pop()); return; }
+    // entrada/saída pode ficar sem texto: continua existindo (para apagar, use "Remover" ou o botão −)
     if (!isNew && textKey(node) === orig) past.pop();
     changed();
     return;
