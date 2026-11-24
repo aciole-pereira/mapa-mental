@@ -185,6 +185,8 @@ const DEFAULT_PORTS = { idea: [[''], ['']], link: [[''], ['']], comp: [['', ''],
 function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
+// Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
+const APP_VERSION = 'v33';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -2673,6 +2675,11 @@ const CMD = {
   selectAll: () => selectAll(),
   help: showHelp,
   installHelp: showInstallHelp,
+  version: async () => {
+    let sw = '—';
+    try { const k = (await caches.keys()).find(x => x.startsWith('mapa-mental-')); if (k) sw = k.replace('mapa-mental-', ''); } catch {}
+    toast(`Versão do app: ${APP_VERSION} · cache offline: ${sw}`);
+  },
 };
 // menus em texto (como a barra de menus do Grasshopper)
 const MENUS = {
@@ -2680,7 +2687,7 @@ const MENUS = {
   Editar: [['undo', 'Desfazer', 'Ctrl+Z'], ['redo', 'Refazer', 'Ctrl+Y'], '-', ['dup', 'Duplicar', 'Ctrl+D'], ['del', 'Excluir', 'Del'], ['disconnect', 'Desconectar fios'], ['lock', 'Travar / destravar', 'Ctrl+L'], '-', ['selectAll', 'Selecionar tudo', 'Ctrl+A'], ['find', 'Buscar…', 'Ctrl+F'], ['group', 'Agrupar seleção', 'Ctrl+G'], ['arrange', 'Organizar em árvore']],
   Exibir: [['fit', 'Ajustar à tela', 'F'], ['zin', 'Aproximar', '+'], ['zout', 'Afastar', '−'], '-', ['grid', 'Grade'], ['snap', 'Encaixar na grade'], ['select', 'Seleção por toque'], ['layers', 'Camadas (grupos)…'], '-', ['pen', 'Lápis', 'P'], ['present', 'Apresentar'], ['timer', 'Timer…'], ['vote', 'Votação']],
   IA: [['ai-gen', 'Gerar mapa…'], ['ai-expand', 'Expandir ideia selecionada'], ['ai-sum', 'Resumir (seleção ou mapa)'], ['ai-group', 'Agrupar notas por tema'], '-', ['ai-cfg', 'Configurar chave de API…']],
-  Ajuda: [['help', 'Atalhos e dicas'], ['installHelp', 'Como instalar']],
+  Ajuda: [['help', 'Atalhos e dicas'], ['installHelp', 'Como instalar'], '-', ['version', 'Versão ' + APP_VERSION]],
 };
 let openMenuBtn = null;
 function closeDrop() { $('#dropmenu').style.display = 'none'; if (openMenuBtn) openMenuBtn.classList.remove('open'); openMenuBtn = null; }
