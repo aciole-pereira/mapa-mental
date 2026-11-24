@@ -172,12 +172,9 @@ function setNodeText(n, v, prevItems) {
 const textKey = n => JSON.stringify([n.text, n.items || null, n.inputs || null, n.outputs || null]);
 // nós com parâmetros nomeados (etiquetas editáveis e botões + ao aproximar)
 const PARAM_TYPES = ['idea', 'comp', 'link'];
-const DEFAULT_PORTS = { idea: [['I'], ['O']], link: [['I'], ['O']], comp: [['A', 'B'], ['R']] };
-function nextLabel(list, kind) {
-  const seq = kind === 'in' ? 'IABCDEFGHJKLMN' : 'ORSTUVWXYZPQ';
-  for (const c of seq) if (!list.includes(c)) return c;
-  return (kind === 'in' ? 'I' : 'O') + (list.length + 1);
-}
+// entradas/saídas novas nascem sem texto (dá para nomear com duplo clique no ponto)
+const DEFAULT_PORTS = { idea: [[''], ['']], link: [[''], ['']], comp: [['', ''], ['']] };
+function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 const IDX = 'mm.index', CUR = 'mm.current';
