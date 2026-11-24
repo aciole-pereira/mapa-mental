@@ -159,7 +159,8 @@ drop policy if exists "perfil: editar o próprio" on public.profiles;
 create policy "perfil: editar o próprio" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
 drop policy if exists "mapa: ver" on public.maps;
-create policy "mapa: ver" on public.maps for select to authenticated using (public.map_role(id) is not null);
+-- "owner = auth.uid()" é necessário: ao criar o mapa (upsert), map_role() ainda não enxerga a linha nova
+create policy "mapa: ver" on public.maps for select to authenticated using (owner = auth.uid() or public.map_role(id) is not null);
 drop policy if exists "mapa: criar" on public.maps;
 create policy "mapa: criar" on public.maps for insert to authenticated with check (owner = auth.uid());
 drop policy if exists "mapa: editar" on public.maps;
