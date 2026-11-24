@@ -1309,6 +1309,18 @@ function draw() {
       ctx.stroke();
     }
   }
+  if (gs && gs.moved && gs.mode === 'move' && gs.guides) {
+    const gd = gs.guides;
+    ctx.save();
+    ctx.setLineDash([6 / view.z, 4 / view.z]);
+    ctx.lineWidth = 1 / view.z;
+    ctx.strokeStyle = WIRE_SEL;
+    ctx.beginPath();
+    if (gd.x != null) { ctx.moveTo(gd.x, -view.y / view.z); ctx.lineTo(gd.x, (H - view.y) / view.z); }
+    if (gd.y != null) { ctx.moveTo(-view.x / view.z, gd.y); ctx.lineTo((W - view.x) / view.z, gd.y); }
+    ctx.stroke();
+    ctx.restore();
+  }
   if (gs && gs.mode === 'draw' && gs.pts) {
     ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.strokeStyle = settings.penColor; ctx.lineWidth = settings.penWidth;
@@ -1922,6 +1934,40 @@ function cancelEdit() {
 
 // ---------------------------------------------------------------- ponteiros (mouse, toque, caneta)
 const ptrs = new Map();
+// Guias de alinhamento ao arrastar: encaixa quando as bordas/centros de dois objetos quase se alinham
+// e, principalmente, quando o fio entre dois objetos fica reto (saída e entrada na mesma altura).
+function alignSnap(g, ddx, ddy, touch) {
+  const th = (touch ? 10 : 7) / view.z;
+  const moving = g.starts;
+  const others = doc.nodes.filter(n => !moving.has(n.id) && !isHidden(n) && n.type !== 'draw' && n.type !== 'group');
+  let bx = null, by = null, wy = null;
+  for (const [id, s] of moving) {
+    const n = byId(id);
+    if (!n || n.type === 'draw') continue;
+    const x0 = s.x + ddx, y0 = s.y + ddy;
+    const xs = [x0, x0 + n.w / 2, x0 + n.w], ys = [y0, y0 + n.h / 2, y0 + n.h];
+    for (const o of others) {
+      const oxs = [o.x, o.x + o.w / 2, o.x + o.w], oys = [o.y, o.y + o.h / 2, o.y + o.h];
+      for (const a of xs) for (const b of oxs) { const d = b - a; if (Math.abs(d) < th && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: b }; }
+      for (const a of ys) for (const b of oys) { const d = b - a; if (Math.abs(d) < th && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: b }; }
+    }
+  }
+  // fio reto: um lado do fio se move, o outro fica parado
+  for (const w of doc.wires) {
+    const a = byId(w.from), b = byId(w.to);
+    if (!a || !b) continue;
+    const am = moving.has(a.id), bm = moving.has(b.id);
+    if (am === bm) continue;
+    const mov = am ? a : b, fix = am ? b : a, s = moving.get(mov.id);
+    const pm = (am ? gripOut(mov, w.fp | 0) : gripIn(mov, w.tp | 0)).y - mov.y + s.y + ddy;
+    const pf = (am ? gripIn(fix, w.tp | 0) : gripOut(fix, w.fp | 0)).y;
+    const d = pf - pm;
+    if (Math.abs(d) < th && (!wy || Math.abs(d) < Math.abs(wy.d))) wy = { d, at: pf };
+  }
+  const yy = wy || by;
+  g.guides = bx || yy ? { x: bx ? bx.at : null, y: yy ? yy.at : null } : null;
+  return { dx: bx ? bx.d : 0, dy: yy ? yy.d : 0 };
+}
 let gesture = null, pinch = null, longTimer = null;
 let lastTap = { t: 0, x: 0, y: 0 };
 
@@ -2063,6 +2109,7 @@ canvas.addEventListener('pointermove', e => {
         ddx = Math.round((s.x + ddx) / GRID) * GRID - s.x;
         ddy = Math.round((s.y + ddy) / GRID) * GRID - s.y;
       }
+      if (!e.altKey && g.starts.size) { const a = alignSnap(g, ddx, ddy, g.touch); ddx += a.dx; ddy += a.dy; } else g.guides = null;
       for (const [id, s] of g.starts) { const n = byId(id); if (n) { n.x = s.x + ddx; n.y = s.y + ddy; } }
       broadcastMove(g.starts);
       updateTrash(p, g);
