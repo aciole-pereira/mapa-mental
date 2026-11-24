@@ -1,11 +1,3 @@
-// Fio no estilo do Grasshopper: sai da saída e chega na entrada sempre na horizontal, em curva suave.
-// Quanto mais "para trás" ou mais desalinhado verticalmente, mais a curva abre (como no Grasshopper).
-function curve(p0, p3) {
-  const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
-  const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
-  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.9, 0.6 * ady, 1.05 * ady * (1 - forward));
-  return [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
-}
 'use strict';
 (() => {
 // =====================================================================
@@ -186,7 +178,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v34';
+const APP_VERSION = 'v35';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -569,9 +561,12 @@ function seedStarter() {
 function wirePts(a, b, w) {
   return curve(gripOut(a, w && w.fp), gripIn(b, w && w.tp));
 }
+// Fio no estilo do Grasshopper: sai da saída e chega na entrada sempre na horizontal, em curva suave e aberta.
+// Quanto mais "para trás" ou mais desalinhado verticalmente, mais a curva abre (calibrado pelo print do Grasshopper).
 function curve(p0, p3) {
-  const dx = p3.x - p0.x;
-  const d = dx >= 0 ? Math.max(30, dx * 0.5) : Math.max(80, -dx * 0.5, Math.abs(p3.y - p0.y) * 0.3);
+  const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
+  const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
+  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.9, 0.6 * ady, 1.05 * ady * (1 - forward));
   return [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
 }
 function bez(p, t) {
