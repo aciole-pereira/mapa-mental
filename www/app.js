@@ -4008,6 +4008,8 @@ async function cloudInit() {
     const mod = await import(SB_SDK_URL);
     sb = mod.createClient(CLOUD_CFG.supabaseUrl, CLOUD_CFG.supabaseKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      // keepalive deixa o envio terminar mesmo que a aba/app seja fechado logo em seguida (limite de ~64 KB)
+      global: { fetch: (url, opts = {}) => fetch(url, typeof opts.body === 'string' && opts.body.length < 60000 ? { ...opts, keepalive: true } : opts) },
     });
   } catch {
     cloud.online = false;
@@ -4304,6 +4306,7 @@ async function cloudSave() {
   if (!isCloudMap() || !sb || !me || !canEdit() || cloud.saving) return;
   if (!doc.dirty) return;
   const target = doc;
+  const sentKey = JSON.stringify(target.dirty); // o que estava pendente quando o envio começou
   cloud.saving = true;
   setSaveState('Salvando na nuvem…');
   const payload = { name: target.name, data: { nodes: target.nodes, wires: target.wires } };
@@ -4318,7 +4321,16 @@ async function cloudSave() {
     cloud.saveT = setTimeout(cloudSave, 8000);
     return;
   }
-  if (doc === target) { doc.dirty = null; saveJSON('mm.map.' + doc.id, doc); setSaveState('Salvo na nuvem'); }
+  if (doc === target) {
+    if (JSON.stringify(doc.dirty) === sentKey) { doc.dirty = null; saveJSON('mm.map.' + doc.id, doc); setSaveState('Salvo na nuvem'); }
+    else { scheduleCloudSave(); } // houve mudanças durante o envio: manda de novo
+  }
+}
+// ao sair da tela/app: não espera o intervalo normal
+function flushCloud() {
+  if (!isCloudMap() || !sb || !me || !canEdit() || !doc.dirty) return;
+  clearTimeout(cloud.saveT);
+  cloudSave();
 }
 
 // Mapas da nuvem (meus + compartilhados comigo)
@@ -4338,7 +4350,7 @@ async function openCloudMap(id) {
     const why = error ? (error.message || error.code || 'erro de rede') : 'mapa ainda não está na nuvem';
     console.warn('openCloudMap', id, error || 'sem linha');
     toast('Não foi possível abrir o mapa da nuvem: ' + String(why).slice(0, 90));
-    if (!error && doc && doc.id === id && doc.role === 'owner') { doc.dirty = doc.dirty || Date.now(); scheduleCloudSave(); }
+    if (!error && doc && doc.id === id && doc.role === 'owner') { doc.dirty = doc.dirty || { n: doc.nodes.map(x => x.id), w: doc.wires.map(x => x.id), dn: [], dw: [], name: true }; scheduleCloudSave(); }
     return false;
   }
   let role = 'owner';
@@ -4862,8 +4874,10 @@ if (!(curId && openMap(curId))) {
 }
 new ResizeObserver(resize).observe(stage);
 window.addEventListener('resize', resize);
-window.addEventListener('pagehide', flushSave);
-document.addEventListener('visibilitychange', () => { if (document.hidden) flushSave(); });
+// ao sair da tela ou do app: confirma o texto que está sendo digitado, salva no aparelho e sincroniza com a nuvem
+function saveEverything() { if (editing) commitEdit(); flushSave(); flushCloud(); }
+window.addEventListener('pagehide', saveEverything);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveEverything(); });
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { wrapCache.clear(); doc.nodes.forEach(measure); render(); });
 canvas.tabIndex = 0;
 updateStatus();
