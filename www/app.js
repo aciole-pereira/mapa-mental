@@ -3,7 +3,7 @@
 function curve(p0, p3) {
   const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
   const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
-  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.5, 0.7 * ady * (1 - forward));
+  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.75, 1.05 * ady * (1 - forward));
   return [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
 }
 'use strict';
