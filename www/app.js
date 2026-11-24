@@ -3,7 +3,7 @@
 function curve(p0, p3) {
   const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
   const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
-  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.75, 1.05 * ady * (1 - forward));
+  const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.9, 0.6 * ady, 1.05 * ady * (1 - forward));
   return [p0, { x: p0.x + d, y: p0.y }, { x: p3.x - d, y: p3.y }, p3];
 }
 'use strict';
@@ -186,7 +186,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
