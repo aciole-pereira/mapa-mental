@@ -1044,7 +1044,7 @@ function getImg(src) {
   if (!im) { im = new Image(); im.onload = render; im.src = src; imgCache.set(src, im); }
   return im.complete && im.naturalWidth ? im : null;
 }
-// Imagem: só a figura com borda preta fina e as bolinhas de conexão (legenda, se houver, fica abaixo)
+// Imagem: só a figura (sem borda) e as bolinhas de conexão (legenda, se houver, fica abaixo)
 function drawImage(g, n, isSel, scale, hideText) {
   const im = getImg(n.src);
   if (im) {
@@ -1052,9 +1052,6 @@ function drawImage(g, n, isSel, scale, hideText) {
     const th = Math.max(20, n.w * im.naturalHeight / im.naturalWidth);
     if (Math.abs(n.h - th) > 0.5) { n.h = th; scheduleSave(true); }
     g.drawImage(im, n.x, n.y, n.w, n.h);
-    g.lineWidth = 1.2;
-    g.strokeStyle = '#111111';
-    g.strokeRect(n.x, n.y, n.w, n.h);
   } else {
     g.setLineDash([5, 4]);
     g.lineWidth = 1;
