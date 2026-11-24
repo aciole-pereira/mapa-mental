@@ -2227,7 +2227,7 @@ function onDoubleTap(p, w, hit) {
 }
 
 // ---------------------------------------------------------------- busca rápida (duplo clique)
-let searchAt = null, searchIdx = 0, searchItems = [];
+let searchAt = null, searchIdx = 0, searchItems = [], searchTap = 0;
 const KEYWORDS = {
   panel: /^(painel|panel|nota)\b/i, scribble: /^(rabisco|scribble|texto)\b/i, group: /^(grupo|group)\b/i,
   comp: /^(componente|comp)\b/i, check: /^(checklist|check|lista)\b/i, image: /^(imagem|image|foto)\b/i,
@@ -2274,13 +2274,16 @@ function updateSearch() {
     const li = el('li');
     li.innerHTML = ICON[it.type === 'idea' ? 'idea' : it.type] + `<strong>${TYPE_LABEL[it.type]}</strong>` + (it.text ? `<em>${esc(it.text)}</em>` : '');
     li.className = i === searchIdx ? 'active' : '';
-    li.addEventListener('pointerdown', ev => { ev.preventDefault(); searchIdx = i; acceptSearch(); });
+    // "Imagem" abre o seletor de arquivos, que o celular só permite dentro de um toque completo (click),
+    // não no início do toque (pointerdown); por isso essa opção espera o click
+    li.addEventListener('pointerdown', ev => { ev.preventDefault(); searchIdx = i; if (it.type !== 'image') acceptSearch(); else { li._at = searchAt; searchTap = Date.now(); } });
+    li.addEventListener('click', () => { if (it.type === 'image') { searchIdx = i; acceptSearch(li._at); } });
     searchList.append(li);
   });
 }
-function acceptSearch() {
+function acceptSearch(atOverride) {
   const it = searchItems[searchIdx];
-  const at = searchAt;
+  const at = atOverride || searchAt;
   closeSearch();
   if (!it || !at) return;
   createSpecial(it.type, at, it.text);
@@ -2302,7 +2305,7 @@ searchInput.addEventListener('keydown', e => {
     [...searchList.children].forEach((li, i) => li.classList.toggle('active', i === searchIdx));
   }
 });
-searchInput.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== searchInput) closeSearch(); }, 120));
+searchInput.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== searchInput && Date.now() - searchTap > 1500) closeSearch(); }, 120));
 
 // ---------------------------------------------------------------- menu de contexto
 function hideMenus() {
