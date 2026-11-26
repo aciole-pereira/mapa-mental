@@ -124,10 +124,14 @@ const FORM_K = {
 };
 const STAR_IN = 0.45, STAR_H = (1 + Math.cos(Math.PI / 5)) / 2;   // raio interno; altura/largura da estrela
 const isFormed = n => !!n && n.type === 'idea' && !!FORMS[n.form];
+// imagens também podem ter bolinhas em volta (contorno retangular)
+const canAnchor = n => isFormed(n) || (!!n && n.type === 'image');
+const hasAnchors = n => isFormed(n) || (!!n && n.type === 'image' && !!(n.anchors && n.anchors.length));
+const fk = n => n.type === 'image' ? 'image' : n.form;
 const r3 = v => Math.round(v * 1000) / 1000;
 const circleAt = deg => [r3(0.5 + 0.5 * Math.cos(deg * Math.PI / 180)), r3(0.5 + 0.5 * Math.sin(deg * Math.PI / 180))];
 function formVerts(form) {
-  if (form === 'square') return [[0, 0], [1, 0], [1, 1], [0, 1]];
+  if (form === 'square' || form === 'image') return [[0, 0], [1, 0], [1, 1], [0, 1]];
   if (form === 'diamond') return [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
   if (form === 'triangle') return [[0.5, 0], [1, 1], [0, 1]];
   if (form === 'star') {
@@ -142,6 +146,7 @@ function formVerts(form) {
 }
 function defaultAnchors(form) {
   if (form === 'circle') return [180, 270, 0, 90].map(circleAt);          // um em cada quadrante
+  if (form === 'image') return [[0, 0.5], [1, 0.5]];                      // entrada à esquerda, saída à direita
   if (form === 'square') return [[0, 0.5], [0.5, 0], [1, 0.5], [0.5, 1]];  // um em cada lado
   if (form === 'star') return formVerts('star').filter((_, i) => !(i % 2)); // uma em cada ponta
   return formVerts(form);                                                   // triângulo e losango: nas pontas
@@ -156,6 +161,10 @@ function anchorExtras(form) {
     label: '+ Meio das arestas',
     pts: () => { const V = formVerts(form); return V.map((a, i) => { const b = V[(i + 1) % V.length]; return [r3((a[0] + b[0]) / 2), r3((a[1] + b[1]) / 2)]; }); },
   }];
+  if (form === 'image') return [
+    { label: '+ Meio dos lados', pts: () => [[0, 0.5], [0.5, 0], [1, 0.5], [0.5, 1]] },
+    { label: '+ Cantos', pts: () => [[0, 0], [1, 0], [1, 1], [0, 1]] },
+  ];
   return [];
 }
 function formCenter(n) {
@@ -163,7 +172,7 @@ function formCenter(n) {
 }
 // bolinhas em coordenadas do mapa, com a direção "para fora" (o fio sai nessa direção)
 function anchorPts(n) {
-  const A = n.anchors && n.anchors.length ? n.anchors : defaultAnchors(n.form);
+  const A = n.anchors && n.anchors.length ? n.anchors : defaultAnchors(fk(n));
   const c = formCenter(n);
   return A.map(([u, v]) => {
     const x = n.x + u * n.w, y = n.y + v * n.h;
@@ -177,7 +186,7 @@ function projectOutline(n, wx, wy) {
     const a = Math.atan2((wy - n.y - n.h / 2) / (n.h / 2), (wx - n.x - n.w / 2) / (n.w / 2));
     return [r3(0.5 + 0.5 * Math.cos(a)), r3(0.5 + 0.5 * Math.sin(a))];
   }
-  const V = formVerts(n.form).map(([u, v]) => ({ x: n.x + u * n.w, y: n.y + v * n.h }));
+  const V = formVerts(fk(n)).map(([u, v]) => ({ x: n.x + u * n.w, y: n.y + v * n.h }));
   let best = null, bd = Infinity;
   V.forEach((a, i) => {
     const b = V[(i + 1) % V.length], dx = b.x - a.x, dy = b.y - a.y, l = dx * dx + dy * dy;
@@ -204,7 +213,7 @@ function formPath(g, n) {
   if (n.form === 'square') return rr(g, x, y, w, h, 8);
   g.beginPath();
   if (n.form === 'circle') { g.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); return; }
-  formVerts(n.form).forEach(([u, v], i) => (i ? g.lineTo(x + u * w, y + v * h) : g.moveTo(x + u * w, y + v * h)));
+  formVerts(fk(n)).forEach(([u, v], i) => (i ? g.lineTo(x + u * w, y + v * h) : g.moveTo(x + u * w, y + v * h)));
   g.closePath();
 }
 function drawFormIdea(g, n, isSel, scale, hideText) {
@@ -273,11 +282,18 @@ function setForm(form) {
 // ---------- Modo de edição das bolinhas de uma pilha
 let anchorEdit = null;   // { id, others: [ids selecionados antes] }
 function startAnchorEdit(n) {
-  if (!isFormed(n)) return;
+  if (!canAnchor(n)) return;
   if (!canEdit()) return readOnlyToast();
   if (n.locked) return toast('Objeto travado — destrave para editar (Ctrl+L)');
   if (editing) commitEdit();
-  if (!n.anchors || !n.anchors.length) n.anchors = defaultAnchors(n.form);
+  if (!n.anchors || !n.anchors.length) {
+    // imagem antiga (1 entrada + 1 saída): passa para bolinhas, religando os fios no lugar certo
+    checkpoint();
+    const old = endPoints(n);
+    n.anchors = defaultAnchors(fk(n));
+    remapEnds(n, old);
+    changed();
+  }
   anchorEdit = { id: n.id, others: [...sel].filter(id => id !== n.id) };
   sel = new Set([n.id]); selWire = null;
   buildAnchorbar();
@@ -292,7 +308,7 @@ function endAnchorEdit() {
 }
 function anchorNode() {
   const n = anchorEdit && byId(anchorEdit.id);
-  return n && isFormed(n) && !isHidden(n) && !n.locked ? n : null;
+  return n && canAnchor(n) && !isHidden(n) && !n.locked ? n : null;
 }
 function changeAnchors(n, fn) {
   checkpoint();
@@ -315,7 +331,7 @@ function applyAnchorsTo(targets) {
   const src = anchorNode();
   if (!src || !targets.length) return;
   checkpoint();
-  for (const t of targets) reshape(t, () => { t.form = src.form; t.anchors = src.anchors.map(a => [...a]); });
+  for (const t of targets) reshape(t, () => { if (src.type === 'idea') t.form = src.form; t.anchors = src.anchors.map(a => [...a]); });
   changed();
   toast(`Bolinhas aplicadas a ${targets.length} pilha${targets.length > 1 ? 's' : ''}`);
 }
@@ -323,18 +339,19 @@ function buildAnchorbar() {
   const n = anchorNode(), bar = $('#anchorbar');
   if (!n) return endAnchorEdit();
   bar.innerHTML = '';
-  bar.append(el('span', 'lbl', `Bolinhas (${FORMS[n.form]}): arraste para mover · duplo clique na borda acrescenta · duplo clique na bolinha remove`));
+  const nome = n.type === 'image' ? 'Imagem' : FORMS[n.form];
+  bar.append(el('span', 'lbl', `Bolinhas (${nome}): arraste para mover · duplo clique na borda acrescenta · duplo clique na bolinha remove`));
   const btn = (t, fn) => { const b = el('button', null, t); b.addEventListener('click', fn); bar.append(b); return b; };
-  for (const x of anchorExtras(n.form)) btn(x.label, () => { const m = anchorNode(); if (m) addAnchors(m, x.pts()); });
-  btn('Padrão', () => { const m = anchorNode(); if (m) changeAnchors(m, A => A.splice(0, A.length, ...defaultAnchors(m.form))); });
+  for (const x of anchorExtras(fk(n))) btn(x.label, () => { const m = anchorNode(); if (m) addAnchors(m, x.pts()); });
+  btn('Padrão', () => { const m = anchorNode(); if (m) changeAnchors(m, A => A.splice(0, A.length, ...defaultAnchors(fk(m)))); });
   const ap = btn('Aplicar a…', () => {
     const m = anchorNode(); if (!m) return;
-    const selOthers = anchorEdit.others.map(byId).filter(t => t && t.type === 'idea' && !t.locked && t !== m);
-    const same = doc.nodes.filter(t => t !== m && t.type === 'idea' && t.form === m.form && !t.locked);
+    const selOthers = anchorEdit.others.map(byId).filter(t => t && t.type === m.type && !t.locked && t !== m);
+    const same = doc.nodes.filter(t => t !== m && t.type === m.type && (m.type === 'image' || t.form === m.form) && !t.locked);
     const r = ap.getBoundingClientRect(), s = stage.getBoundingClientRect();
     showMenu(r.left - s.left, r.bottom - s.top, [
       { label: `Pilhas que estavam selecionadas (${selOthers.length})`, disabled: !selOthers.length, action: () => applyAnchorsTo(selOthers) },
-      { label: `Todas as pilhas em ${FORMS[m.form].toLowerCase()} (${same.length})`, disabled: !same.length, action: () => applyAnchorsTo(same) },
+      { label: m.type === 'image' ? `Todas as imagens (${same.length})` : `Todas as pilhas em ${FORMS[m.form].toLowerCase()} (${same.length})`, disabled: !same.length, action: () => applyAnchorsTo(same) },
     ]);
   });
   btn('Concluir', endAnchorEdit);
@@ -442,7 +459,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v42';
+const APP_VERSION = 'v43';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -464,12 +481,12 @@ function byId(id) {
 const hasGrips = n => n.type !== 'scribble' && n.type !== 'group' && n.type !== 'draw';
 function portCount(n, kind) {
   if (!hasGrips(n)) return 0;
-  if (isFormed(n)) return anchorPts(n).length;
+  if (hasAnchors(n)) return anchorPts(n).length;
   if (n.inputs) return (kind === 'in' ? n.inputs : n.outputs).length;
   return 1;
 }
 function ports(n, kind) {
-  if (isFormed(n)) return anchorPts(n);
+  if (hasAnchors(n)) return anchorPts(n);
   const k = portCount(n, kind), x = kind === 'in' ? n.x : n.x + n.w;
   const out = [];
   for (let i = 0; i < k; i++) out.push({ x, y: n.y + n.h * (i + 0.5) / k });
@@ -478,7 +495,7 @@ function ports(n, kind) {
 const gripIn = (n, i = 0) => ports(n, 'in')[i] || { x: n.x, y: n.y + n.h / 2 };
 const gripOut = (n, i = 0) => ports(n, 'out')[i] || { x: n.x + n.w, y: n.y + n.h / 2 };
 function nearestPort(n, kind, w) {
-  if (isFormed(n) && w.x !== undefined) return nearestIdx(ports(n, kind), w);
+  if (hasAnchors(n) && w.x !== undefined) return nearestIdx(ports(n, kind), w);
   let best = 0, bd = Infinity;
   ports(n, kind).forEach((p, i) => { const d = Math.abs(p.y - w.y); if (d < bd) { bd = d; best = i; } });
   return best;
@@ -516,6 +533,8 @@ function normalize(d) {
       if (o.type === 'image') {
         o.src = typeof n.src === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(n.src) ? n.src : '';
         o.w = Math.max(80, o.w || 220); o.h = Math.max(60, o.h || 180);
+        const A = (Array.isArray(n.anchors) ? n.anchors : []).slice(0, 48).filter(a => Array.isArray(a) && isFinite(a[0]) && isFinite(a[1])).map(a => [clamp(+a[0], 0, 1), clamp(+a[1], 0, 1)]);
+        if (A.length) o.anchors = A;
       }
       if (o.type === 'check') o.items = (Array.isArray(n.items) ? n.items : []).slice(0, 50)
         .map(i => ({ t: String((i && i.t) || '').slice(0, 200), done: !!(i && i.done) })).filter(i => i.t);
@@ -906,7 +925,7 @@ function hitTest(wx, wy, touch) {
   for (let i = ns.length - 1; i >= 0; i--) {
     const n = ns[i];
     if (!hasGrips(n) || isHidden(n)) continue;
-    for (const kind of isFormed(n) ? ['out'] : ['in', 'out']) {
+    for (const kind of hasAnchors(n) ? ['out'] : ['in', 'out']) {
       ports(n, kind).forEach((p, idx) => {
         const d = dist(wx, wy, p.x, p.y);
         if (d <= gt && d < bd) { bd = d; best = { kind, node: n, idx }; }
@@ -1216,7 +1235,7 @@ function noShadow(g) { g.shadowColor = 'transparent'; g.shadowBlur = 0; g.shadow
 // desenhado ATRÁS do corpo — só a metade de fora aparece, formando um "C".
 function drawGrips(g, n, edge) {
   const R = 5.2;
-  for (const k of isFormed(n) ? ['out'] : ['in', 'out']) {
+  for (const k of hasAnchors(n) ? ['out'] : ['in', 'out']) {
     ports(n, k).forEach((p, idx) => {
       const hot = hover && hover.node === n && hover.kind === k && hover.idx === idx;
       g.beginPath();
@@ -2982,7 +3001,7 @@ const RIBBON = {
   editar: { label: 'Editar', groups: [
     ['Histórico', [['undo', 'Desfazer', 'Desfazer (Ctrl+Z)'], ['redo', 'Refazer', 'Refazer (Ctrl+Y)'], ['history', 'Versões', 'Histórico de versões']]],
     ['Seleção', [['dup', 'Duplicar', 'Duplicar (Ctrl+D)'], ['disconnect', 'Desconectar', 'Remover fios da seleção'], ['del', 'Excluir', 'Excluir (Delete)'], ['lock', 'Travar', 'Travar / destravar (Ctrl+L)'], ['find', 'Buscar', 'Buscar no mapa (Ctrl+F)']]],
-    ['Formato', [['f-rect', 'Padrão', 'Formato padrão (Grasshopper)'], ['f-square', 'Quadrado'], ['f-circle', 'Círculo'], ['f-triangle', 'Triângulo'], ['f-diamond', 'Losango'], ['f-star', 'Estrela'], ['f-edit', 'Bolinhas', 'Editar as bolinhas de conexão da pilha selecionada']]],
+    ['Formato', [['f-rect', 'Padrão', 'Formato padrão (Grasshopper)'], ['f-square', 'Quadrado'], ['f-circle', 'Círculo'], ['f-triangle', 'Triângulo'], ['f-diamond', 'Losango'], ['f-star', 'Estrela'], ['f-edit', 'Bolinhas', 'Editar as bolinhas de conexão da pilha ou imagem selecionada']]],
     ['Estado', [['st-normal', 'Normal'], ['st-warning', 'Aviso'], ['st-error', 'Erro'], ['st-disabled', 'Desativ.', 'Desativado']]],
     ['Mapa', [['arrange', 'Organizar', 'Organizar ideias em árvore']]],
   ] },
@@ -3012,9 +3031,9 @@ const CMD = {
   'f-triangle': () => formCmd('triangle'), 'f-diamond': () => formCmd('diamond'), 'f-star': () => formCmd('star'),
   'f-edit': () => {
     // com várias selecionadas, edita a primeira; as outras ficam prontas para "Aplicar a…"
-    const ideas = selectedNodes().filter(n => n.type === 'idea');
-    if (!ideas.length) return toast('Selecione uma ideia para editar as bolinhas');
-    const n = ideas.find(isFormed);
+    const ideas = selectedNodes().filter(n => n.type === 'idea' || n.type === 'image');
+    if (!ideas.length) return toast('Selecione uma ideia ou imagem para editar as bolinhas');
+    const n = ideas.find(canAnchor);
     if (!n) return toast('Primeiro escolha um formato (quadrado, círculo, triângulo, losango ou estrela)');
     startAnchorEdit(n);
   },
@@ -3580,6 +3599,7 @@ function extraNodeItems(n) {
     items.push({ label: 'Formato', swatches: Object.keys(FORM_ICON).map(k => ({ text: FORM_ICON[k], title: k ? FORMS[k] : 'Padrão (Grasshopper)', action: () => setForm(k) })) });
     if (isFormed(n)) items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
   }
+  if (n.type === 'image') items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
   if (doc.wires.some(w => w.from === n.id)) {
     items.push({ label: 'Cor do ramo', swatches: BRANCH_COLORS.map(c => ({ color: c, action: () => colorBranch(n, c) })) });
     items.push({ label: 'Limpar cor do ramo', action: () => colorBranch(n, null) });
