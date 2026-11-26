@@ -36,6 +36,10 @@ GitHub) pelo navegador, pedindo autorização antes de mudanças em contas.
   tudo que já respeita `isHidden()` funciona por nível. Apagar/copiar uma pasta leva
   o conteúdo junto (`withFolderContents`).
 - **Travado** (`n.locked`) tem a aparência do "Disable" do Grasshopper.
+- **Texto formatado dos painéis:** `n.rich` (parágrafos com `align/list/ind` e trechos
+  `{t,b,i,u,s,f,z,c,h}`), editado por um `contenteditable` (`openRich`/`htmlToRich`) e
+  desenhado no canvas por `drawRich`. `n.text` segue com o texto puro; se ele mudar por outro
+  caminho e não bater mais com o `rich`, o `rich` é ignorado (`richOf`). Validação em `normRich`.
 
 ## Testes no navegador (importante)
 Testar sempre numa **aba nova**, com um **mapa de teste** criado via JS e aberto

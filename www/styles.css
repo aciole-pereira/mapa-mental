@@ -642,3 +642,71 @@ body.presenting .trash { display: none; }
 .crumbs .sep { color: #888; }
 body.infolder #timer { top: 52px; }
 body.presenting .crumbs { display: none; }
+
+/* Painel de notas: edição com formatação (como num Word) */
+.richedit {
+  position: absolute;
+  display: none;
+  z-index: 5;
+  transform-origin: 0 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  padding: 0;
+  margin: 0;
+  color: #1A1A1A;
+  font: 12px/1.3334 var(--font);
+  outline: 2px solid var(--green);
+  outline-offset: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+  caret-color: #111;
+}
+.richedit div, .richedit p, .richedit li { margin-top: 0; margin-bottom: 0; }
+.richedit ul, .richedit ol { margin: 0; padding-left: 18px; }
+.richedit blockquote { margin: 0 0 0 20px; }
+.richbar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px 4px;
+  z-index: 9;
+  width: max-content;
+  border-color: #3A3A3A;
+}
+.richbar .rrow { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; }
+.richbar .rrow .sp { flex: 1; min-width: 6px; }
+.richbar button.rbt {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 3px;
+  font: 13px var(--font); color: #1B1B1B;
+}
+.richbar button.rbt svg { width: 18px; height: 18px; display: block; }
+.richbar button.rbt.on { background: var(--green-soft); border-color: var(--green); }
+.richbar button.rbt.arrow { min-width: 13px; padding: 0 1px; margin-left: -2px; }
+.richbar button.rbt i { font-style: normal; font-size: 9px; color: #555; }
+.richbar button.rbt .it { font-style: italic; font-family: Georgia, serif; font-size: 14px; color: #1B1B1B; }
+.richbar button.rbt b, .richbar button.rbt u { font-size: 14px; }
+.richbar button.wide { justify-content: space-between; gap: 4px; background: #fff; border-color: #ABABAB; height: 24px; }
+.richbar .fontsel { width: 132px; }
+.richbar .fontsel .fv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.richbar .sizesel { width: 46px; margin-left: 2px; }
+.richbar .okb { color: var(--green-dark); }
+.richdrop {
+  position: absolute; display: block; z-index: 12;
+  max-height: 300px; overflow-y: auto; min-width: 70px; background: #FBFBFB;
+}
+.richdrop .mi { padding-left: 12px !important; display: block; width: 100%; text-align: left; }
+.richdrop .mi.on { background: var(--green-soft); }
+.richdrop .rsw { display: grid; grid-template-columns: repeat(8, 20px); gap: 4px; padding: 6px 8px; }
+.richdrop .rsw .sw { width: 20px; height: 20px; border: 1px solid #777; padding: 0; cursor: pointer; border-radius: 2px; }
+.richdrop .rsw .sw:hover { outline: 2px solid var(--green); }
+@media (pointer: coarse) {
+  .richbar button.rbt { min-width: 34px; height: 34px; }
+  .richbar button.rbt.arrow { min-width: 18px; }
+  .richbar button.wide { height: 32px; }
+  .richdrop .rsw { grid-template-columns: repeat(8, 28px); }
+  .richdrop .rsw .sw { width: 28px; height: 28px; }
+  .richbar { max-width: calc(100% - 8px); width: auto; }
+}

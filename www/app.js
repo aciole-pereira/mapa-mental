@@ -110,6 +110,185 @@ function textWidth(lines, font) {
   for (const l of lines) w = Math.max(w, mctx.measureText(l).width);
   return w;
 }
+// ---------- Texto formatado dos painéis de notas (como num Word)
+// n.rich = [{ align, list, ind, runs: [{ t, b, i, u, s, f, z, c, h }] }]  (um item por parágrafo)
+//   align: 'center' | 'right' | 'justify' (ausente = esquerda) · list: 'ul' | 'ol' · ind: recuo 1–6
+//   b/i/u/s: negrito/itálico/sublinhado/tachado · f: fonte (chave de RICH_FONTS) · z: tamanho em px
+//   c: cor do texto · h: cor de realce
+// n.text continua com o texto puro (parágrafos separados por \n): a busca, a IA e a exportação usam ele.
+// Se n.text mudar por outro caminho e não bater mais com o rich, o rich é ignorado.
+const RICH_FONTS = {
+  '': ['Padrão (Segoe UI)', FONT],
+  arial: ['Arial', 'Arial, Helvetica, sans-serif'],
+  verdana: ['Verdana', 'Verdana, Geneva, sans-serif'],
+  tahoma: ['Tahoma', 'Tahoma, Verdana, sans-serif'],
+  trebuchet: ['Trebuchet MS', '"Trebuchet MS", Helvetica, sans-serif'],
+  calibri: ['Calibri', 'Calibri, Carlito, sans-serif'],
+  georgia: ['Georgia', 'Georgia, serif'],
+  times: ['Times New Roman', '"Times New Roman", Times, serif'],
+  garamond: ['Garamond', 'Garamond, "EB Garamond", serif'],
+  courier: ['Courier New', '"Courier New", Courier, monospace'],
+  consolas: ['Consolas', 'Consolas, "Liberation Mono", monospace'],
+  comic: ['Comic Sans MS', '"Comic Sans MS", "Comic Sans", cursive'],
+  impact: ['Impact', 'Impact, "Arial Black", sans-serif'],
+};
+const RICH_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 60, 72];
+const RICH_DEF = 12, RICH_COLOR = '#1A1A1A', RICH_IND = 20, RICH_LIST = 18;
+const RICH_ALIGN = ['center', 'right', 'justify'];
+const RICH_FLAGS = ['b', 'i', 'u', 's'];
+const richPlainCache = new WeakMap();
+function richPlain(r) {
+  let t = richPlainCache.get(r);
+  if (t === undefined) { t = r.map(p => p.runs.map(s => s.t).join('')).join('\n'); richPlainCache.set(r, t); }
+  return t;
+}
+const sameRunStyle = (a, b) => ['b', 'i', 'u', 's', 'f', 'z', 'c', 'h'].every(k => (a[k] || '') === (b[k] || ''));
+// valida e limpa o rich (dados vindos do arquivo, da nuvem ou do editor); null = sem formatação
+function normRich(r, text) {
+  if (!Array.isArray(r) || !r.length || r.length > 2000 || String(text).length > 60000) return null;
+  let count = 0, fancy = false;
+  const out = [];
+  for (const p of r) {
+    if (!p || typeof p !== 'object') return null;
+    const q = {};
+    if (RICH_ALIGN.includes(p.align)) q.align = p.align;
+    if (p.list === 'ul' || p.list === 'ol') q.list = p.list;
+    const ind = clamp(p.ind | 0, 0, 6);
+    if (ind) q.ind = ind;
+    if (q.align || q.list || q.ind) fancy = true;
+    q.runs = [];
+    for (const s of Array.isArray(p.runs) ? p.runs : []) {
+      if (!s || typeof s.t !== 'string' || !s.t) continue;
+      if (++count > 5000) return null;
+      const o = { t: s.t.replace(/[\r\n]/g, ' ') };
+      for (const k of RICH_FLAGS) if (s[k]) o[k] = 1;
+      if (typeof s.f === 'string' && s.f && RICH_FONTS[s.f]) o.f = s.f;
+      const z = Math.round(+s.z || 0);
+      if (z && z !== RICH_DEF) o.z = clamp(z, 6, 96);
+      if (isHex(s.c) && s.c.toUpperCase() !== RICH_COLOR) o.c = s.c.toUpperCase();
+      if (isHex(s.h)) o.h = s.h.toUpperCase();
+      if (Object.keys(o).length > 1) fancy = true;
+      const prev = q.runs[q.runs.length - 1];
+      if (prev && sameRunStyle(prev, o)) prev.t += o.t; else q.runs.push(o);
+    }
+    out.push(q);
+  }
+  if (!fancy || richPlain(out) !== String(text)) return null;
+  return out;
+}
+// formatação válida do painel (ou null, e aí ele é desenhado como texto simples)
+const richOf = n => (n.type === 'panel' && Array.isArray(n.rich) && richPlain(n.rich) === n.text ? n.rich : null);
+const richFont = s => `${s.i ? 'italic ' : ''}${s.b ? 'bold ' : ''}${s.z || RICH_DEF}px ${RICH_FONTS[s.f || ''][1]}`;
+const fontMetricCache = new Map();
+function fontMetrics(font, z) {
+  let m = fontMetricCache.get(font);
+  if (!m) {
+    mctx.font = font;
+    const t = mctx.measureText('Hgjy');
+    const a = t.fontBoundingBoxAscent, d = t.fontBoundingBoxDescent;
+    m = isFinite(a) && isFinite(d) && a > 0 ? { a, d } : { a: z * 0.92, d: z * 0.24 };
+    fontMetricCache.set(font, m);
+  }
+  return m;
+}
+const RICH_BULLETS = ['•', '◦', '▪'];
+const richLayoutCache = new Map();
+// quebra as linhas trecho por trecho (cada um medido com a própria fonte)
+function richLayout(rich, maxW) {
+  const key = maxW + '|' + JSON.stringify(rich);
+  const hit = richLayoutCache.get(key);
+  if (hit) return hit;
+  const lines = [];
+  let y = 0, cnt = [];
+  for (const p of rich) {
+    const lvl = p.ind || 0;
+    if (!p.list) cnt = [];
+    else { cnt.length = lvl + 1; cnt[lvl] = p.list === 'ol' ? (cnt[lvl] || 0) + 1 : 0; }
+    const x0 = lvl * RICH_IND + (p.list ? RICH_LIST : 0);
+    const avail = Math.max(10, maxW - x0);
+    const first = p.runs[0] || {};
+    const marker = p.list ? { t: p.list === 'ol' ? cnt[lvl] + '.' : RICH_BULLETS[lvl % 3], font: richFont({ ...first, u: 0, s: 0, h: 0 }), c: first.c, x: lvl * RICH_IND } : null;
+    // pedaços: palavras e espaços separados, cada um com o estilo do trecho
+    const toks = [];
+    for (const s of p.runs) {
+      const font = richFont(s);
+      mctx.font = font;
+      for (const t of s.t.split(/(\s+)/)) if (t) toks.push({ t, s, font, w: mctx.measureText(t).width, sp: /^\s+$/.test(t) });
+    }
+    const paraLines = [];
+    let cur = [], cw = 0;
+    const push = () => {
+      while (cur.length && cur[cur.length - 1].sp) cw -= cur.pop().w;
+      paraLines.push({ items: cur, w: cw });
+      cur = []; cw = 0;
+    };
+    for (let tk of toks) {
+      if (tk.sp && !cur.length && paraLines.length) continue;      // espaço no começo de linha quebrada
+      if (!tk.sp && cw + tk.w > avail && cur.some(c => !c.sp)) push();
+      // palavra maior que a linha: quebra por letras
+      while (!tk.sp && tk.w > avail - cw && tk.t.length > 1) {
+        mctx.font = tk.font;
+        let i = tk.t.length - 1;
+        while (i > 1 && mctx.measureText(tk.t.slice(0, i)).width > avail - cw) i--;
+        if (cw > 0 && mctx.measureText(tk.t.slice(0, i)).width > avail - cw) { push(); continue; }
+        const head = tk.t.slice(0, i), tail = tk.t.slice(i);
+        cur.push({ ...tk, t: head, w: mctx.measureText(head).width }); cw += cur[cur.length - 1].w;
+        push();
+        tk = { ...tk, t: tail, w: mctx.measureText(tail).width };
+      }
+      cur.push(tk); cw += tk.w;
+    }
+    push();
+    paraLines.forEach((ln, li) => {
+      let a = 0, d = 0, zmax = 0;
+      const items = ln.items.length ? ln.items : [{ s: first, font: richFont(first) }];
+      for (const it of items) {
+        const z = it.s.z || RICH_DEF, m = fontMetrics(it.font, z);
+        a = Math.max(a, m.a); d = Math.max(d, m.d); zmax = Math.max(zmax, z);
+      }
+      const h = Math.max(a + d, zmax * 4 / 3);
+      const free = Math.max(0, avail - ln.w);
+      let x = x0, gap = 0;
+      if (p.align === 'center') x += free / 2;
+      else if (p.align === 'right') x += free;
+      else if (p.align === 'justify' && li < paraLines.length - 1) {
+        const gaps = ln.items.filter(it => it.sp).length;
+        if (gaps) gap = free / gaps;
+      }
+      const placed = ln.items.map(it => { const o = { t: it.t, s: it.s, font: it.font, sp: it.sp, x, w: it.w + (it.sp ? gap : 0) }; x += o.w; return o; });
+      lines.push({ y, h, base: (h - a - d) / 2 + a, items: placed, marker: li === 0 ? marker : null });
+      y += h;
+    });
+  }
+  const out = { lines, h: y };
+  if (richLayoutCache.size > 400) richLayoutCache.clear();
+  richLayoutCache.set(key, out);
+  return out;
+}
+function drawRich(g, rich, x, y, w, h) {
+  const L = richLayout(rich, w);
+  g.textAlign = 'left';
+  g.textBaseline = 'alphabetic';
+  for (const ln of L.lines) {
+    if (ln.y > h) break;
+    const top = y + ln.y, by = top + ln.base;
+    for (const it of ln.items) if (it.s.h) { g.fillStyle = it.s.h; g.fillRect(x + it.x, top, it.w + 0.5, ln.h); }
+    if (ln.marker) {
+      g.font = ln.marker.font; g.fillStyle = ln.marker.c || RICH_COLOR;
+      g.fillText(ln.marker.t, x + ln.marker.x + (RICH_LIST - 4) - g.measureText(ln.marker.t).width, by);
+    }
+    for (const it of ln.items) {
+      const col = it.s.c || RICH_COLOR;
+      if (!it.sp) { g.font = it.font; g.fillStyle = col; g.fillText(it.t, x + it.x, by); }
+      if (it.s.u || it.s.s) {
+        const z = it.s.z || RICH_DEF, th = Math.max(1, z / 14);
+        g.fillStyle = col;
+        if (it.s.u) g.fillRect(x + it.x, by + Math.max(1, z * 0.12), it.w, th);
+        if (it.s.s) g.fillRect(x + it.x, by - z * 0.3, it.w, th);
+      }
+    }
+  }
+}
 // ---------- Formatos das pilhas (ideias): quadrado, círculo, triângulo, losango, estrela
 // Numa ideia com formato, as bolinhas ficam em volta da forma (n.anchors = [[u, v], ...],
 // posições de 0 a 1 dentro do retângulo da pilha). Cada bolinha serve de entrada e de saída.
@@ -452,7 +631,7 @@ function setNodeText(n, v, prevItems) {
   const prev = new Map((prevItems || n.items).map(i => [i.t, i.done]));
   n.items = lines.map(s => s.trim()).filter(Boolean).slice(0, 50).map(t => ({ t, done: !!prev.get(t) }));
 }
-const textKey = n => JSON.stringify([n.text, n.items || null, n.inputs || null, n.outputs || null]);
+const textKey = n => JSON.stringify([n.text, n.items || null, n.inputs || null, n.outputs || null, n.rich || null]);
 // nós com parâmetros nomeados (etiquetas editáveis e botões + ao aproximar)
 const PARAM_TYPES = ['idea', 'comp', 'link'];
 // entradas/saídas novas nascem sem texto (dá para nomear com duplo clique no ponto)
@@ -461,7 +640,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v50';
+const APP_VERSION = 'v51';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -545,6 +724,8 @@ function normalize(d) {
       if (o.type === 'panel') {
         const A = (Array.isArray(n.anchors) ? n.anchors : []).slice(0, 48).filter(a => Array.isArray(a) && isFinite(a[0]) && isFinite(a[1])).map(a => [clamp(+a[0], 0, 1), clamp(+a[1], 0, 1)]);
         if (A.length) o.anchors = A;
+        const R = normRich(n.rich, o.text);
+        if (R) o.rich = R;
       }
       if (o.type === 'group') {
         o.color = isHex(n.color) ? n.color : GROUP_COLORS[0];
@@ -1523,8 +1704,9 @@ function drawPanel(g, n, isSel, scale, hideText) {
     g.fillStyle = '#1A1A1A';
     g.textAlign = 'left';
     g.textBaseline = 'top';
-    const L = wrap(n.text || '', F.panel, n.w - 16);
-    L.forEach((l, i) => g.fillText(l, n.x + 8, n.y + 8 + i * LH.panel));
+    const R = richOf(n);
+    if (R) drawRich(g, R, n.x + 8, n.y + 8, n.w - 16, n.h - 16);
+    else wrap(n.text || '', F.panel, n.w - 16).forEach((l, i) => g.fillText(l, n.x + 8, n.y + 8 + i * LH.panel));
     g.restore();
   }
   // alça de redimensionar
@@ -2201,7 +2383,9 @@ function startEdit(n, isNew = false, field = null) {
     node: n, isNew, field, orig: textKey(n), origText: n.text,
     origItems: n.items ? n.items.map(i => ({ ...i })) : null,
     origPorts: n.inputs ? [[...n.inputs], [...n.outputs]] : null,
+    origRich: n.rich, rich: n.type === 'panel' && !field,
   };
+  if (editing.rich) { openRich(n); render(); return; }
   editor.value = field ? portList(n, field.side)[field.idx] : getNodeText(n);
   editor.wrap = field || ['scribble', 'group', 'comp', 'image'].includes(n.type) ? 'off' : 'soft';
   editor.style.display = 'block';
@@ -2211,6 +2395,7 @@ function startEdit(n, isNew = false, field = null) {
   render();
 }
 function positionEditor() {
+  if (editing.rich) return positionRich();
   const n = editing.node, z = view.z;
   let x = n.x, y = n.y, w = n.w, h = n.h, type = n.type, align = 'left', bg = '#fff', pt = 0, color = '#111';
   const { lw, rw } = n.inputs ? compGeom(n) : { lw: SIDE, rw: SIDE };
@@ -2303,8 +2488,10 @@ editor.addEventListener('keydown', e => {
 editor.addEventListener('blur', () => { if (!ignoreBlur && editing) commitEdit(); });
 
 function closeEditor() {
+  const wasRich = editing && editing.rich;
   editing = null;
   ignoreBlur = true;
+  if (wasRich) closeRich();
   editor.blur();
   ignoreBlur = false;
   editor.style.display = 'none';
@@ -2312,6 +2499,17 @@ function closeEditor() {
 function commitEdit() {
   if (!editing) return;
   const { node, isNew, orig, origItems, field } = editing;
+  if (editing.rich) {
+    const R = htmlToRich(richEl);
+    closeEditor();
+    node.text = richPlain(R);
+    const clean = normRich(R, node.text);
+    if (clean) node.rich = clean; else delete node.rich;
+    if (isNew && !node.text.trim()) { restore(past.pop()); return; }
+    if (!isNew && textKey(node) === orig) past.pop();
+    changed();
+    return;
+  }
   closeEditor();
   if (field) {
     const v = editor.value.replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -2331,16 +2529,435 @@ function commitEdit() {
 }
 function cancelEdit() {
   if (!editing) return;
-  const { node, isNew, origText, origItems, origPorts } = editing;
+  const { node, isNew, origText, origItems, origPorts, origRich } = editing;
   closeEditor();
   if (isNew) { restore(past.pop()); return; }
   node.text = origText;
+  if (origRich) node.rich = origRich; else delete node.rich;
   if (origItems) node.items = origItems;
   if (origPorts) { node.inputs = origPorts[0]; node.outputs = origPorts[1]; }
   measure(node);
   past.pop();
   render();
 }
+
+// ---------------------------------------------------------------- editor de texto formatado (painéis)
+// Caixa contenteditable sobre o painel + barra de formatação. Ao confirmar, o HTML vira o modelo
+// n.rich (só estilos permitidos); nada de HTML cru vai para o mapa.
+const richEl = el('div', 'richedit');
+richEl.contentEditable = 'true';
+richEl.spellcheck = false;
+richEl.setAttribute('autocapitalize', 'sentences');
+const richBar = el('div', 'floatbar richbar');
+richBar.hidden = true;
+stage.append(richEl, richBar);
+let richRange = null, richHold = false, richSize = RICH_DEF, richDrop = null;
+
+function runCss(s) {
+  const st = [];
+  if (s.b) st.push('font-weight:bold');
+  if (s.i) st.push('font-style:italic');
+  if (s.u || s.s) st.push('text-decoration-line:' + [s.u && 'underline', s.s && 'line-through'].filter(Boolean).join(' '));
+  if (s.f) st.push('font-family:' + RICH_FONTS[s.f][1].replace(/"/g, "'"));
+  if (s.z) st.push(`font-size:${s.z}px`);
+  if (s.c) st.push('color:' + s.c);
+  if (s.h) st.push('background-color:' + s.h);
+  return st.join(';');
+}
+function richToHtml(rich, text) {
+  const paras = rich || String(text).split('\n').map(t => ({ runs: t ? [{ t }] : [] }));
+  let html = '', open = null;
+  for (const p of paras) {
+    const key = p.list ? p.list + (p.ind || 0) : null;
+    if (open && open !== key) { html += `</${open.slice(0, 2)}>`; open = null; }
+    if (p.list && !open) { html += `<${p.list} style="margin-left:${(p.ind || 0) * RICH_IND}px">`; open = key; }
+    const st = (p.align ? `text-align:${p.align};` : '') + (!p.list && p.ind ? `margin-left:${p.ind * RICH_IND}px` : '');
+    const inner = p.runs.map(s => { const c = runCss(s); return c ? `<span style="${c}">${esc(s.t)}</span>` : esc(s.t); }).join('') || '<br>';
+    html += p.list ? `<li style="${st}">${inner}</li>` : `<div style="${st}">${inner}</div>`;
+  }
+  if (open) html += `</${open.slice(0, 2)}>`;
+  return html;
+}
+function cssHex(v) {
+  const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?/.exec(v || '');
+  if (!m) return null;
+  if (m[4] !== undefined && parseFloat(m[4]) === 0) return null;
+  return '#' + [m[1], m[2], m[3]].map(x => (+x).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+const firstFamily = f => String(f || '').split(',')[0].trim().replace(/^["']|["']$/g, '').toLowerCase();
+function fontKey(family) {
+  const f = firstFamily(family);
+  for (const [k, v] of Object.entries(RICH_FONTS)) if (firstFamily(v[1]) === f) return k;
+  return '';
+}
+const RICH_BLOCK = 'DIV,P,LI,UL,OL,H1,H2,H3,H4,H5,H6,BLOCKQUOTE,PRE,SECTION,ARTICLE,TABLE,TR,TD'.split(',');
+// DOM do editor → modelo (lê o estilo calculado de cada pedaço de texto)
+function htmlToRich(root) {
+  const paras = [];
+  let cur = null;
+  const paraFor = block => {
+    const cs = getComputedStyle(block);
+    const ta = cs.textAlign;
+    const p = { runs: [] };
+    if (ta === 'center' || ta === '-webkit-center') p.align = 'center';
+    else if (ta === 'right' || ta === 'end' || ta === '-webkit-right') p.align = 'right';
+    else if (ta === 'justify') p.align = 'justify';
+    let px = 0, lists = 0;
+    for (let a = block; a && a !== root; a = a.parentElement) {
+      px += parseFloat(getComputedStyle(a).marginLeft) || 0;
+      if (a.tagName === 'UL' || a.tagName === 'OL') lists++;
+    }
+    const li = block.closest('li');
+    if (li && root.contains(li)) p.list = li.parentElement && li.parentElement.tagName === 'OL' ? 'ol' : 'ul';
+    const ind = Math.round(px / RICH_IND) + Math.max(0, lists - 1);
+    if (ind) p.ind = Math.min(6, ind);
+    paras.push(p);
+    return p;
+  };
+  const styleOf = node => {
+    const e = node.parentElement, cs = getComputedStyle(e);
+    const s = {};
+    if ((parseInt(cs.fontWeight) || 400) >= 600) s.b = 1;
+    if (cs.fontStyle === 'italic' || cs.fontStyle.startsWith('oblique')) s.i = 1;
+    for (let a = e; a && a !== root.parentElement; a = a.parentElement) {
+      const d = getComputedStyle(a).textDecorationLine || '';
+      if (d.includes('underline')) s.u = 1;
+      if (d.includes('line-through')) s.s = 1;
+      if (a === root) break;
+    }
+    const f = fontKey(cs.fontFamily); if (f) s.f = f;
+    const z = Math.round(parseFloat(cs.fontSize)); if (z && z !== RICH_DEF) s.z = z;
+    const c = cssHex(cs.color); if (c && c !== RICH_COLOR) s.c = c;
+    for (let a = e; a && a !== root; a = a.parentElement) {
+      const h = cssHex(getComputedStyle(a).backgroundColor);
+      if (h) { s.h = h; break; }
+      if (RICH_BLOCK.includes(a.tagName)) break;
+    }
+    return s;
+  };
+  function walk(node, block) {
+    for (const ch of node.childNodes) {
+      if (ch.nodeType === 3) {
+        const t = ch.data.replace(/[​﻿]/g, '');
+        if (!t) continue;
+        const parts = t.split(/\r?\n/);
+        const s = styleOf(ch);
+        parts.forEach((part, i) => {
+          if (i > 0) cur = null;
+          if (!cur) cur = paraFor(block);
+          if (part) cur.runs.push({ ...s, t: part });
+        });
+      } else if (ch.nodeType === 1) {
+        if (ch.tagName === 'BR') { if (!cur) cur = paraFor(block); cur = null; continue; }
+        if (['SCRIPT', 'STYLE', 'IMG', 'svg', 'VIDEO', 'IFRAME', 'OBJECT'].includes(ch.tagName)) continue;
+        if (RICH_BLOCK.includes(ch.tagName)) {
+          cur = null;
+          const before = paras.length;
+          walk(ch, ch);
+          if (paras.length === before && !['UL', 'OL', 'TABLE', 'TR'].includes(ch.tagName)) paraFor(ch);
+          cur = null;
+        } else walk(ch, block);
+      }
+    }
+  }
+  walk(root, root);
+  if (!paras.length) paras.push({ runs: [] });
+  return paras;
+}
+
+// ---------- abrir / posicionar / fechar
+function openRich(n) {
+  try { document.execCommand('defaultParagraphSeparator', false, 'div'); } catch {}
+  richEl.innerHTML = richToHtml(richOf(n), n.text || '');
+  richEl.style.display = 'block';
+  richBar.hidden = false;
+  if (!richBar.firstChild) buildRichBar();
+  richSize = RICH_DEF;
+  positionRich();
+  richEl.focus({ preventScroll: true });
+  const r = document.createRange();
+  r.selectNodeContents(richEl);
+  // no celular não seleciona tudo (uma tecla apagaria o texto formatado): cursor no fim
+  if (!n.text || matchMedia('(pointer: coarse)').matches) r.collapse(false);
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  richRange = r.cloneRange();
+  updateRichBar();
+}
+function positionRich() {
+  const n = editing.node, z = view.z;
+  const s = richEl.style;
+  s.left = (n.x + 8) * z + view.x + 'px';
+  s.top = (n.y + 8) * z + view.y + 'px';
+  s.width = Math.max(20, n.w - 16) + 'px';
+  s.height = Math.max(16, n.h - 16) + 'px';
+  s.transform = `scale(${z})`;
+  s.background = n.color;
+  // barra: em cima do painel (ou embaixo, se não couber), sempre dentro da tela
+  const W = stage.clientWidth, H = stage.clientHeight;
+  const bw = richBar.offsetWidth, bh = richBar.offsetHeight;
+  const top = n.y * z + view.y, bot = (n.y + n.h) * z + view.y;
+  let bx = clamp(n.x * z + view.x, 4, Math.max(4, W - bw - 4));
+  let by = top - bh - 8;
+  if (by < 4) by = bot + 8 + bh < H ? bot + 8 : 4;
+  richBar.style.left = bx + 'px';
+  richBar.style.top = by + 'px';
+}
+function closeRich() {
+  closeRichDrop();
+  richEl.blur();
+  richEl.style.display = 'none';
+  richBar.hidden = true;
+  richEl.innerHTML = '';
+  richRange = null;
+}
+
+// ---------- comandos
+function richRestore() {
+  if (document.activeElement !== richEl) richEl.focus({ preventScroll: true });
+  if (richRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(richRange); }
+}
+function richCmd(name, val, css = true) {
+  richRestore();
+  try { document.execCommand('styleWithCSS', false, css); } catch {}
+  document.execCommand(name, false, val);
+  richAfter();
+}
+function richAfter() {
+  fixRichSizes();
+  const s = getSelection();
+  if (s.rangeCount && richEl.contains(s.anchorNode)) richRange = s.getRangeAt(0).cloneRange();
+  updateRichBar();
+}
+// o tamanho usa o truque do <font size=7>, trocado em seguida pelo tamanho em px
+function fixRichSizes() {
+  for (const f of richEl.querySelectorAll('font[size="7"], span[style*="xxx-large"]')) {
+    const sp = document.createElement('span');
+    sp.style.fontSize = richSize + 'px';
+    if (f.tagName === 'SPAN') { sp.style.cssText = f.style.cssText; sp.style.fontSize = richSize + 'px'; }
+    while (f.firstChild) sp.append(f.firstChild);
+    f.replaceWith(sp);
+    for (const d of sp.querySelectorAll('[style]')) d.style.fontSize = '';
+    for (const d of sp.querySelectorAll('font[size]')) d.removeAttribute('size');
+  }
+}
+function richSetSize(z) {
+  richSize = clamp(Math.round(z), 6, 96);
+  richCmd('fontSize', '7', false);
+}
+function richBlocks() {
+  const r = richRange;
+  if (!r) return [];
+  const sel = 'div,p,li,h1,h2,h3,h4,h5,h6,blockquote';
+  let bs = [...richEl.querySelectorAll(sel)].filter(b => r.intersectsNode(b) && !b.querySelector(sel));
+  if (!bs.length) {
+    richRestore();
+    document.execCommand('formatBlock', false, 'div');
+    richAfter();
+    bs = [...richEl.querySelectorAll(sel)].filter(b => richRange && richRange.intersectsNode(b) && !b.querySelector(sel));
+  }
+  return bs;
+}
+function richIndent(d) {
+  for (const b of richBlocks()) {
+    const v = clamp((parseFloat(b.style.marginLeft) || 0) + d * RICH_IND, 0, 6 * RICH_IND);
+    b.style.marginLeft = v ? v + 'px' : '';
+  }
+  richRestore();
+  richAfter();
+}
+function richClear() {
+  richRestore();
+  const s = getSelection();
+  if (s.isCollapsed) { const r = document.createRange(); r.selectNodeContents(richEl); s.removeAllRanges(); s.addRange(r); richRange = r.cloneRange(); }
+  document.execCommand('removeFormat');
+  // tira também o que o removeFormat deixa: tamanho, fonte, realce e os recuos/alinhamentos
+  for (const e of richEl.querySelectorAll('span, font')) if (s.rangeCount && s.getRangeAt(0).intersectsNode(e)) {
+    e.removeAttribute('style'); e.removeAttribute('face'); e.removeAttribute('size'); e.removeAttribute('color');
+  }
+  for (const b of richBlocks()) { b.style.textAlign = ''; b.style.marginLeft = ''; }
+  richAfter();
+}
+function richState() {
+  const q = c => { try { return document.queryCommandState(c); } catch { return false; } };
+  const s = getSelection();
+  let node = s.rangeCount && richEl.contains(s.anchorNode) ? s.anchorNode : richEl;
+  if (node.nodeType === 3) node = node.parentElement;
+  const cs = getComputedStyle(node);
+  return {
+    b: q('bold'), i: q('italic'), u: q('underline'), s: q('strikeThrough'),
+    ul: q('insertUnorderedList'), ol: q('insertOrderedList'),
+    align: q('justifyCenter') ? 'center' : q('justifyRight') ? 'right' : q('justifyFull') ? 'justify' : 'left',
+    f: fontKey(cs.fontFamily), z: Math.round(parseFloat(cs.fontSize)) || RICH_DEF,
+  };
+}
+
+// ---------- barra de formatação
+const RICH_TEXT_COLORS = ['#1A1A1A', '#595959', '#A6A6A6', '#FFFFFF', '#C00000', '#FF0000', '#FFC000', '#FFFF00', '#92D050', '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0', '#FF66CC', '#8B5A2B'];
+const RICH_HILITE = ['#FFFF00', '#00FF00', '#00FFFF', '#FF00FF', '#FFC000', '#FF8080', '#9DC3E6', '#C5E0B4', '#D9D9D9', '#FFFFFF'];
+const ri = d => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${d}</svg>`;
+const RICH_ICONS = {
+  left: ri('<path d="M3 4h14M3 8h9M3 12h14M3 16h9"/>'),
+  center: ri('<path d="M3 4h14M5.5 8h9M3 12h14M5.5 16h9"/>'),
+  right: ri('<path d="M3 4h14M8 8h9M3 12h14M8 16h9"/>'),
+  justify: ri('<path d="M3 4h14M3 8h14M3 12h14M3 16h14"/>'),
+  ul: ri('<circle cx="4" cy="5" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="10" r="1.3" fill="currentColor" stroke="none"/><circle cx="4" cy="15" r="1.3" fill="currentColor" stroke="none"/><path d="M8 5h9M8 10h9M8 15h9"/>'),
+  ol: `<svg viewBox="0 0 20 20"><text x="1.5" y="7" font-size="6.5" font-family="Arial" fill="currentColor">1</text><text x="1.5" y="12.5" font-size="6.5" font-family="Arial" fill="currentColor">2</text><text x="1.5" y="18" font-size="6.5" font-family="Arial" fill="currentColor">3</text><path d="M8 5h9M8 10.5h9M8 16h9" stroke="currentColor" stroke-width="1.6"/></svg>`,
+  outdent: ri('<path d="M9 4h8M9 8h8M9 12h8M3 16h14"/><path d="M6 7l-3 2.5L6 12" stroke-linejoin="round"/>'),
+  indent: ri('<path d="M9 4h8M9 8h8M9 12h8M3 16h14"/><path d="M3 7l3 2.5L3 12" stroke-linejoin="round"/>'),
+  clear: `<svg viewBox="0 0 20 20"><text x="2" y="14" font-size="13" font-family="Georgia,serif" font-style="italic" fill="currentColor">T</text><path d="M11 11l6 6M17 11l-6 6" stroke="#C00000" stroke-width="1.8"/></svg>`,
+  grow: `<svg viewBox="0 0 20 20"><text x="1" y="16" font-size="14" font-family="Arial" fill="currentColor">A</text><path d="M13 7l3-4 3 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`,
+  shrink: `<svg viewBox="0 0 20 20"><text x="2" y="16" font-size="11" font-family="Arial" fill="currentColor">A</text><path d="M12 3l3 4 3-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`,
+  color: `<svg viewBox="0 0 20 20"><text x="4.5" y="13" font-size="12.5" font-weight="bold" font-family="Arial" fill="#222">A</text><rect class="bar" x="3" y="15.2" width="14" height="3.3" fill="#C00000"/></svg>`,
+  hilite: `<svg viewBox="0 0 20 20"><path d="M5 12.5l7-8 3 2.6-7 8H5z" fill="#fff" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/><path d="M5 12.5l-1.5 2h4" fill="none" stroke="#222" stroke-width="1.1"/><rect class="bar" x="3" y="15.2" width="14" height="3.3" fill="#FFFF00"/></svg>`,
+  ok: ri('<path d="M4 10.5l4 4 8-9" stroke-width="2.2" stroke-linejoin="round"/>'),
+};
+let richColor = '#C00000', richHi = '#FFFF00';
+function rbtn(key, title, html, act, cls = '') {
+  const b = el('button', 'rbt ' + cls);
+  b.type = 'button';
+  b.dataset.rk = key;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.innerHTML = html;
+  b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (e.button === 0 || e.pointerType !== 'mouse') act(b); });
+  b.addEventListener('click', e => e.preventDefault());
+  return b;
+}
+function buildRichBar() {
+  const sep = () => el('span', 'sepv');
+  const fontBtn = rbtn('font', 'Fonte', '<span class="fv">Padrão</span><i>▾</i>', b => openRichDrop(b, Object.entries(RICH_FONTS).map(([k, v]) => ({
+    label: v[0], style: `font-family:${v[1].replace(/"/g, "'")}`, on: richState().f === k, act: () => richCmd('fontName', v[1]),
+  }))), 'wide fontsel');
+  const sizeBtn = rbtn('size', 'Tamanho da fonte', '<span class="zv">12</span><i>▾</i>', b => openRichDrop(b, RICH_SIZES.map(z => ({
+    label: String(z), on: richState().z === z, act: () => richSetSize(z),
+  }))), 'wide sizesel');
+  const step = d => { const z = richState().z; const k = d > 0 ? RICH_SIZES.find(v => v > z) : [...RICH_SIZES].reverse().find(v => v < z); richSetSize(k || z); };
+  const swatches = (list, cur, set, none) => b => openRichDrop(b, [
+    ...(none ? [{ label: none, act: () => set(null) }] : []),
+    { swatches: list, act: c => set(c) },
+    { label: 'Mais cores…', act: () => { richHold = true; pickColor(cur(), c => { richHold = false; set(c); }); setTimeout(() => { richHold = false; }, 60000); } },
+  ]);
+  const setColor = c => { if (c) { richColor = c; paintBars(); } richCmd('foreColor', c || RICH_COLOR); };
+  const setHi = c => { if (c) { richHi = c; paintBars(); } richCmd('hiliteColor', c || 'transparent'); };
+  const colorBtn = rbtn('color', 'Cor da fonte', RICH_ICONS.color, () => setColor(richColor));
+  const colorDrop = rbtn('colorm', 'Escolher a cor da fonte', '<i>▾</i>', swatches(RICH_TEXT_COLORS, () => richColor, setColor, 'Automática (preto)'), 'arrow');
+  const hiBtn = rbtn('hilite', 'Cor de realce do texto', RICH_ICONS.hilite, () => setHi(richHi));
+  const hiDrop = rbtn('hilitem', 'Escolher a cor de realce', '<i>▾</i>', swatches(RICH_HILITE, () => richHi, setHi, 'Sem realce'), 'arrow');
+  const row1 = el('div', 'rrow'), row2 = el('div', 'rrow');
+  row1.append(
+    fontBtn, sizeBtn,
+    rbtn('grow', 'Aumentar fonte', RICH_ICONS.grow, () => step(1)),
+    rbtn('shrink', 'Diminuir fonte', RICH_ICONS.shrink, () => step(-1)),
+    sep(),
+    rbtn('clear', 'Limpar formatação (da seleção, ou do painel todo se nada estiver selecionado)', RICH_ICONS.clear, richClear),
+    el('span', 'sp'),
+    rbtn('ok', 'Concluir (Ctrl+Enter)', RICH_ICONS.ok, () => commitEdit(), 'okb'),
+  );
+  row2.append(
+    rbtn('b', 'Negrito (Ctrl+B)', '<b>N</b>', () => richCmd('bold')),
+    rbtn('i', 'Itálico (Ctrl+I)', '<i class="it">I</i>', () => richCmd('italic')),
+    rbtn('u', 'Sublinhado (Ctrl+U)', '<u>S</u>', () => richCmd('underline')),
+    rbtn('s', 'Tachado', '<s>abc</s>', () => richCmd('strikeThrough')),
+    sep(),
+    colorBtn, colorDrop, hiBtn, hiDrop,
+    sep(),
+    rbtn('left', 'Alinhar à esquerda', RICH_ICONS.left, () => richCmd('justifyLeft')),
+    rbtn('center', 'Centralizar', RICH_ICONS.center, () => richCmd('justifyCenter')),
+    rbtn('right', 'Alinhar à direita', RICH_ICONS.right, () => richCmd('justifyRight')),
+    rbtn('justify', 'Justificar', RICH_ICONS.justify, () => richCmd('justifyFull')),
+    sep(),
+    rbtn('ul', 'Marcadores', RICH_ICONS.ul, () => richCmd('insertUnorderedList')),
+    rbtn('ol', 'Numeração', RICH_ICONS.ol, () => richCmd('insertOrderedList')),
+    rbtn('outdent', 'Diminuir recuo (Shift+Tab)', RICH_ICONS.outdent, () => richIndent(-1)),
+    rbtn('indent', 'Aumentar recuo (Tab)', RICH_ICONS.indent, () => richIndent(1)),
+  );
+  richBar.append(row1, row2);
+  richBar.addEventListener('pointerdown', e => { e.stopPropagation(); if (!e.target.closest('button')) e.preventDefault(); });
+  paintBars();
+}
+function paintBars() {
+  const c = richBar.querySelector('[data-rk="color"] .bar'), h = richBar.querySelector('[data-rk="hilite"] .bar');
+  if (c) c.setAttribute('fill', richColor);
+  if (h) h.setAttribute('fill', richHi);
+}
+function updateRichBar() {
+  if (richBar.hidden || !richBar.firstChild) return;
+  const st = richState();
+  for (const k of ['b', 'i', 'u', 's', 'ul', 'ol']) richBar.querySelector(`[data-rk="${k}"]`).classList.toggle('on', !!st[k]);
+  for (const k of ['left', 'center', 'right', 'justify']) richBar.querySelector(`[data-rk="${k}"]`).classList.toggle('on', st.align === k);
+  richBar.querySelector('.fv').textContent = (RICH_FONTS[st.f] || RICH_FONTS[''])[0].replace(' (Segoe UI)', '');
+  richBar.querySelector('.zv').textContent = st.z;
+}
+function openRichDrop(btn, items) {
+  const was = richDrop && richDrop._btn === btn;
+  closeRichDrop();
+  if (was) return;
+  const d = el('div', 'richdrop menu');
+  d._btn = btn;
+  for (const it of items) {
+    if (it.swatches) {
+      const row = el('div', 'rsw');
+      for (const c of it.swatches) {
+        const s = el('button', 'sw');
+        s.type = 'button'; s.style.background = c; s.title = c;
+        s.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); closeRichDrop(); it.act(c); });
+        row.append(s);
+      }
+      d.append(row);
+      continue;
+    }
+    const b = el('button', 'mi' + (it.on ? ' on' : ''), it.label);
+    b.type = 'button';
+    if (it.style) b.style.cssText = it.style;
+    b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); closeRichDrop(); it.act(); });
+    d.append(b);
+  }
+  richBar.append(d);
+  const br = btn.getBoundingClientRect(), pr = richBar.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  let left = br.left - pr.left, top = br.bottom - pr.top + 2;
+  d.style.left = left + 'px'; d.style.top = top + 'px';
+  const dr = d.getBoundingClientRect();
+  if (dr.right > sr.right - 4) d.style.left = Math.max(-pr.left + sr.left + 4, left - (dr.right - sr.right + 4)) + 'px';
+  if (dr.bottom > sr.bottom - 4) { const up = br.top - pr.top - dr.height - 2; if (pr.top + up > sr.top) d.style.top = up + 'px'; else d.style.maxHeight = Math.max(80, sr.bottom - dr.top - 8) + 'px'; }
+  richDrop = d;
+}
+function closeRichDrop() { if (richDrop) { richDrop.remove(); richDrop = null; } }
+
+// ---------- eventos da caixa
+document.addEventListener('selectionchange', () => {
+  if (!editing || !editing.rich) return;
+  const s = getSelection();
+  if (s.rangeCount && richEl.contains(s.anchorNode)) { richRange = s.getRangeAt(0).cloneRange(); updateRichBar(); }
+});
+richEl.addEventListener('input', () => { fixRichSizes(); });
+richEl.addEventListener('keydown', e => {
+  if (!editing) return;
+  e.stopPropagation();
+  if (e.key === 'Escape') { e.preventDefault(); if (richDrop) closeRichDrop(); else cancelEdit(); }
+  else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(); }
+  else if (e.key === 'Tab') { e.preventDefault(); richIndent(e.shiftKey ? -1 : 1); }
+  else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === 'X' || e.key === 'x')) { e.preventDefault(); richCmd('strikeThrough'); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); richClear(); }
+});
+richEl.addEventListener('keyup', e => e.stopPropagation());
+// colar: só o texto (a formatação de fora não entra)
+richEl.addEventListener('paste', e => {
+  e.preventDefault();
+  const t = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+  if (t) document.execCommand('insertText', false, t.replace(/\r\n?/g, '\n'));
+});
+richEl.addEventListener('drop', e => e.preventDefault());
+richEl.addEventListener('blur', e => {
+  if (ignoreBlur || !editing || !editing.rich || richHold) return;
+  if (e.relatedTarget && richBar.contains(e.relatedTarget)) return;
+  setTimeout(() => {
+    if (!editing || !editing.rich || richHold) return;
+    if (document.activeElement === richEl || richBar.contains(document.activeElement)) return;
+    commitEdit();
+  }, 0);
+});
+richEl.addEventListener('pointerdown', e => { e.stopPropagation(); closeRichDrop(); });
+richEl.addEventListener('wheel', e => e.stopPropagation(), { passive: true });
 
 // ---------------------------------------------------------------- ponteiros (mouse, toque, caneta)
 const ptrs = new Map();
