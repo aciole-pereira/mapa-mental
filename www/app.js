@@ -178,7 +178,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v37';
+const APP_VERSION = 'v38';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -263,6 +263,11 @@ function normalize(d) {
       if (n.parent) o.parent = String(n.parent).slice(0, 64);
       if ((n.votes | 0) > 0) o.votes = n.votes | 0;
       if (o.type === 'idea' && n.icon) o.icon = String(n.icon).slice(0, 8);
+      if (o.type === 'idea' && n.layout && typeof n.layout === 'object') {
+        const lay = {};
+        for (const [k, v] of Object.entries(n.layout).slice(0, 500)) if (Array.isArray(v) && isFinite(v[0]) && isFinite(v[1])) lay[String(k).slice(0, 64)] = [+v[0], +v[1]];
+        if (Object.keys(lay).length) o.layout = lay;
+      }
       if (o.type === 'shape') { o.shape = SHAPES[n.shape] ? n.shape : 'rect'; o.color = isHex(n.color) ? n.color : SHAPE_COLORS[1]; o.w = Math.max(40, o.w || 160); o.h = Math.max(30, o.h || 90); }
       if (o.type === 'draw') {
         o.color = isHex(n.color) ? n.color : '#1A1A1A'; o.width = clamp(+n.width || 3, 1, 40);
@@ -430,7 +435,7 @@ function groupMembersDeep(g, acc = new Set()) {
 }
 
 // ---------------------------------------------------------------- histórico
-const snapshot = () => JSON.stringify({ nodes: doc.nodes, wires: doc.wires });
+const snapshot = () => JSON.stringify({ nodes: persistNodes(), wires: doc.wires });
 function checkpoint() {
   guardEdit();
   past.push(snapshot());
@@ -460,6 +465,7 @@ function redo() {
 function changed() {
   fixGroups(doc.nodes);
   computeHidden();
+  syncFolderLayout();
   queueMicrotask(cloudAfterChange);
   idMap = null;
   for (const id of [...sel]) if (!byId(id)) sel.delete(id);
@@ -477,7 +483,7 @@ function saveNow() {
   saveT = null;
   doc.updated = Date.now();
   doc.view = { ...view };
-  const ok = saveJSON('mm.map.' + doc.id, doc);
+  const ok = saveJSON('mm.map.' + doc.id, folderSwap.size ? { ...doc, nodes: persistNodes() } : doc);
   const idx = loadJSON(IDX, {});
   idx[doc.id] = { name: doc.name, updated: doc.updated };
   saveJSON(IDX, idx);
@@ -499,7 +505,7 @@ function openMap(id) {
   if (editing) commitEdit();
   doc = normalize(d);
   doc.cloud = !!d.cloud; doc.role = d.role || null; doc.dirty = d.dirty || null;
-  currentFolder = null; folderViews = {}; updateCrumbs();
+  currentFolder = null; folderViews = {}; folderSwap = new Map(); updateCrumbs();
   idMap = null;
   past = []; future = [];
   sel.clear(); selWire = null;
@@ -2881,7 +2887,7 @@ async function downloadBlob(blob, filename) {
 }
 function exportJson() {
   flushSave();
-  const data = { app: 'mapa-mental', version: 1, name: doc.name, nodes: doc.nodes, wires: doc.wires };
+  const data = { app: 'mapa-mental', version: 1, name: doc.name, nodes: persistNodes(), wires: doc.wires };
   downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), safeName(doc.name) + '.json');
 }
 $('#importFile').addEventListener('change', async e => {
@@ -4351,7 +4357,7 @@ async function ensureCloud() {
 const entJson = o => JSON.stringify(o);
 function snapshotState() {
   return {
-    nodes: new Map(doc.nodes.map(n => [n.id, entJson(n)])),
+    nodes: new Map(persistNodes().map(n => [n.id, entJson(n)])),
     wires: new Map(doc.wires.map(w => [w.id, entJson(w)])),
     name: doc.name,
   };
@@ -4361,7 +4367,7 @@ function diffOps() {
   const L = cloud.last || { nodes: new Map(), wires: new Map(), name: doc.name };
   const ops = { un: [], dn: [], uw: [], dw: [], name: null };
   const seenN = new Set(), seenW = new Set();
-  for (const n of doc.nodes) { seenN.add(n.id); if (L.nodes.get(n.id) !== entJson(n)) ops.un.push(n); }
+  for (const n of persistNodes()) { seenN.add(n.id); if (L.nodes.get(n.id) !== entJson(n)) ops.un.push(n); }
   for (const id of L.nodes.keys()) if (!seenN.has(id)) ops.dn.push(id);
   for (const w of doc.wires) { seenW.add(w.id); if (L.wires.get(w.id) !== entJson(w)) ops.uw.push(w); }
   for (const id of L.wires.keys()) if (!seenW.has(id)) ops.dw.push(id);
@@ -4399,7 +4405,7 @@ async function cloudSave() {
   const sentKey = JSON.stringify(target.dirty); // o que estava pendente quando o envio começou
   cloud.saving = true;
   setSaveState('Salvando na nuvem…');
-  const payload = { name: target.name, data: { nodes: target.nodes, wires: target.wires } };
+  const payload = { name: target.name, data: { nodes: target === doc ? persistNodes() : target.nodes, wires: target.wires } };
   const q = target.role === 'owner'
     ? sb.from('maps').upsert({ id: target.id, owner: me.id, ...payload })
     : sb.from('maps').update(payload).eq('id', target.id);
@@ -4639,7 +4645,7 @@ function broadcastMove(starts) {
   if (!cloud.channel || !canEdit() || Date.now() - moveSendT < 60) return;
   moveSendT = Date.now();
   const pos = [];
-  for (const [id] of starts) { const n = byId(id); if (n) pos.push([id, Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10]); }
+  for (const [id] of starts) { const n = byId(id); if (n && !folderSwap.has(id)) pos.push([id, Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10]); }
   cloud.channel.send({ type: 'broadcast', event: 'move', payload: { pos } });
 }
 let presT = 0, presCursor = null;
@@ -5018,9 +5024,11 @@ function goToFolder(id, focus) {
   if (editing) commitEdit();
   hideMenus();
   saveFolderView();
+  restoreSwap();
   currentFolder = id || null;
   sel = new Set(focus ? [focus] : []); selWire = null;
   computeHidden();
+  syncFolderLayout();
   updateCrumbs();
   const saved = folderViews[currentFolder || ''];
   if (saved) animateView(saved);
@@ -5066,6 +5074,53 @@ function updateCrumbs() {
   out.addEventListener('click', folderUp);
   bar.append(out);
 }
+
+// ---------- Arrumação própria de cada pasta
+// As ideias do CAMINHO (que pertencem ao nível de fora) podem ser reposicionadas
+// dentro da pasta sem mudar o mapa de fora: a pasta guarda as posições em
+// pasta.layout = { id: [x, y] }. Enquanto a pasta está aberta, essas ideias são
+// deslocadas na memória; tudo o que é salvo/enviado usa a posição ORIGINAL.
+let folderSwap = new Map();        // id → { obj, x, y }  (x,y = posição original)
+function persistNodes() {
+  if (!folderSwap.size) return doc.nodes;
+  return doc.nodes.map(n => { const e = folderSwap.get(n.id); return e && e.obj === n ? { ...n, x: e.x, y: e.y } : n; });
+}
+function restoreSwap() {
+  for (const [id, e] of folderSwap) { const n = byId(id); if (n && n === e.obj) { n.x = e.x; n.y = e.y; } }
+  folderSwap = new Map();
+}
+function syncFolderLayout() {
+  const F = currentFolder && byId(currentFolder);
+  if (!F) { if (folderSwap.size) restoreSwap(); return; }
+  const lay = F.layout || {};
+  const keep = new Set();
+  for (const n of doc.nodes) {
+    if (isHidden(n) || n.parent === F.id) continue;   // só o caminho (nível de fora)
+    keep.add(n.id);
+    const e = folderSwap.get(n.id);
+    if (!e || e.obj !== n) {
+      // entrando (ou o objeto foi trocado por desfazer/nuvem): guarda o original e aplica a arrumação da pasta
+      folderSwap.set(n.id, { obj: n, x: n.x, y: n.y });
+      const q = lay[n.id];
+      if (q) { n.x = q[0]; n.y = q[1]; }
+    } else {
+      // já estava aplicado: se mudou de lugar aqui dentro, grava na pasta
+      const q = lay[n.id], cx = q ? q[0] : e.x, cy = q ? q[1] : e.y;
+      if (Math.abs(n.x - cx) > 0.01 || Math.abs(n.y - cy) > 0.01) {
+        if (!F.layout) F.layout = {};
+        F.layout[n.id] = [Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10];
+      }
+    }
+  }
+  // o que deixou de ser caminho volta ao lugar original
+  for (const [id, e] of [...folderSwap]) {
+    if (keep.has(id)) continue;
+    const n = byId(id);
+    if (n && n === e.obj) { n.x = e.x; n.y = e.y; }
+    folderSwap.delete(id);
+  }
+}
+
 // 3º clique: o 2º clique abriu a edição do texto; o 3º cai na caixa de edição
 editor.addEventListener('pointerdown', e => {
   if (!editing || !lastDouble) return;
