@@ -125,9 +125,11 @@ const FORM_K = {
 const STAR_IN = 0.45, STAR_H = (1 + Math.cos(Math.PI / 5)) / 2;   // raio interno; altura/largura da estrela
 const isFormed = n => !!n && n.type === 'idea' && !!FORMS[n.form];
 // imagens também podem ter bolinhas em volta (contorno retangular)
-const canAnchor = n => isFormed(n) || (!!n && n.type === 'image');
-const hasAnchors = n => isFormed(n) || (!!n && n.type === 'image' && !!(n.anchors && n.anchors.length));
-const fk = n => n.type === 'image' ? 'image' : n.form;
+// imagens e painéis de notas: contorno retangular (mesmas bolinhas padrão e extras)
+const RECT_ANCHOR = ['image', 'panel'];
+const canAnchor = n => isFormed(n) || (!!n && RECT_ANCHOR.includes(n.type));
+const hasAnchors = n => isFormed(n) || (!!n && RECT_ANCHOR.includes(n.type) && !!(n.anchors && n.anchors.length));
+const fk = n => RECT_ANCHOR.includes(n.type) ? 'image' : n.form;
 const r3 = v => Math.round(v * 1000) / 1000;
 const circleAt = deg => [r3(0.5 + 0.5 * Math.cos(deg * Math.PI / 180)), r3(0.5 + 0.5 * Math.sin(deg * Math.PI / 180))];
 function formVerts(form) {
@@ -339,7 +341,7 @@ function buildAnchorbar() {
   const n = anchorNode(), bar = $('#anchorbar');
   if (!n) return endAnchorEdit();
   bar.innerHTML = '';
-  const nome = n.type === 'image' ? 'Imagem' : FORMS[n.form];
+  const nome = n.type === 'idea' ? FORMS[n.form] : TYPE_LABEL[n.type];
   bar.append(el('span', 'lbl', `Bolinhas (${nome}): arraste para mover · duplo clique na borda acrescenta · duplo clique na bolinha remove`));
   const btn = (t, fn) => { const b = el('button', null, t); b.addEventListener('click', fn); bar.append(b); return b; };
   for (const x of anchorExtras(fk(n))) btn(x.label, () => { const m = anchorNode(); if (m) addAnchors(m, x.pts()); });
@@ -347,11 +349,11 @@ function buildAnchorbar() {
   const ap = btn('Aplicar a…', () => {
     const m = anchorNode(); if (!m) return;
     const selOthers = anchorEdit.others.map(byId).filter(t => t && t.type === m.type && !t.locked && t !== m);
-    const same = doc.nodes.filter(t => t !== m && t.type === m.type && (m.type === 'image' || t.form === m.form) && !t.locked);
+    const same = doc.nodes.filter(t => t !== m && t.type === m.type && (m.type !== 'idea' || t.form === m.form) && !t.locked);
     const r = ap.getBoundingClientRect(), s = stage.getBoundingClientRect();
     showMenu(r.left - s.left, r.bottom - s.top, [
       { label: `Pilhas que estavam selecionadas (${selOthers.length})`, disabled: !selOthers.length, action: () => applyAnchorsTo(selOthers) },
-      { label: m.type === 'image' ? `Todas as imagens (${same.length})` : `Todas as pilhas em ${FORMS[m.form].toLowerCase()} (${same.length})`, disabled: !same.length, action: () => applyAnchorsTo(same) },
+      { label: m.type === 'image' ? `Todas as imagens (${same.length})` : m.type === 'panel' ? `Todos os painéis (${same.length})` : `Todas as pilhas em ${FORMS[m.form].toLowerCase()} (${same.length})`, disabled: !same.length, action: () => applyAnchorsTo(same) },
     ]);
   });
   btn('Concluir', endAnchorEdit);
@@ -459,7 +461,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v47';
+const APP_VERSION = 'v48';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -540,6 +542,10 @@ function normalize(d) {
       if (o.type === 'check') o.items = (Array.isArray(n.items) ? n.items : []).slice(0, 50)
         .map(i => ({ t: String((i && i.t) || '').slice(0, 200), done: !!(i && i.done) })).filter(i => i.t);
       if (o.type === 'panel') { o.color = isHex(n.color) ? n.color : PANEL_COLORS[0]; o.w = Math.max(80, o.w || 200); o.h = Math.max(40, o.h || 110); }
+      if (o.type === 'panel') {
+        const A = (Array.isArray(n.anchors) ? n.anchors : []).slice(0, 48).filter(a => Array.isArray(a) && isFinite(a[0]) && isFinite(a[1])).map(a => [clamp(+a[0], 0, 1), clamp(+a[1], 0, 1)]);
+        if (A.length) o.anchors = A;
+      }
       if (o.type === 'group') {
         o.color = isHex(n.color) ? n.color : GROUP_COLORS[0];
         o.style = GROUP_STYLES[n.style] ? n.style : 'box';
@@ -3063,7 +3069,7 @@ const RIBBON = {
   editar: { label: 'Editar', groups: [
     ['Histórico', [['undo', 'Desfazer', 'Desfazer (Ctrl+Z)'], ['redo', 'Refazer', 'Refazer (Ctrl+Y)'], ['history', 'Versões', 'Histórico de versões']]],
     ['Seleção', [['dup', 'Duplicar', 'Duplicar (Ctrl+D)'], ['disconnect', 'Desconectar', 'Remover fios da seleção'], ['del', 'Excluir', 'Excluir (Delete)'], ['lock', 'Travar', 'Travar / destravar (Ctrl+L)'], ['find', 'Buscar', 'Buscar no mapa (Ctrl+F)']]],
-    ['Formato', [['f-rect', 'Padrão', 'Formato padrão (Grasshopper)'], ['f-square', 'Quadrado'], ['f-circle', 'Círculo'], ['f-triangle', 'Triângulo'], ['f-diamond', 'Losango'], ['f-star', 'Estrela'], ['f-edit', 'Bolinhas', 'Editar as bolinhas de conexão da pilha ou imagem selecionada']]],
+    ['Formato', [['f-rect', 'Padrão', 'Formato padrão (Grasshopper)'], ['f-square', 'Quadrado'], ['f-circle', 'Círculo'], ['f-triangle', 'Triângulo'], ['f-diamond', 'Losango'], ['f-star', 'Estrela'], ['f-edit', 'Bolinhas', 'Editar as bolinhas de conexão da pilha, imagem ou painel selecionado']]],
     ['Estado', [['st-normal', 'Normal'], ['st-warning', 'Aviso'], ['st-error', 'Erro'], ['st-disabled', 'Desativ.', 'Desativado']]],
     ['Mapa', [['arrange', 'Organizar', 'Organizar ideias em árvore']]],
   ] },
@@ -3093,8 +3099,8 @@ const CMD = {
   'f-triangle': () => formCmd('triangle'), 'f-diamond': () => formCmd('diamond'), 'f-star': () => formCmd('star'),
   'f-edit': () => {
     // com várias selecionadas, edita a primeira; as outras ficam prontas para "Aplicar a…"
-    const ideas = selectedNodes().filter(n => n.type === 'idea' || n.type === 'image');
-    if (!ideas.length) return toast('Selecione uma ideia ou imagem para editar as bolinhas');
+    const ideas = selectedNodes().filter(n => n.type === 'idea' || RECT_ANCHOR.includes(n.type));
+    if (!ideas.length) return toast('Selecione uma ideia, imagem ou painel para editar as bolinhas');
     const n = ideas.find(canAnchor);
     if (!n) return toast('Primeiro escolha um formato (quadrado, círculo, triângulo, losango ou estrela)');
     startAnchorEdit(n);
@@ -3687,7 +3693,7 @@ function extraNodeItems(n) {
     items.push({ label: 'Formato', swatches: Object.keys(FORM_ICON).map(k => ({ text: FORM_ICON[k], title: k ? FORMS[k] : 'Padrão (Grasshopper)', action: () => setForm(k) })) });
     if (isFormed(n)) items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
   }
-  if (n.type === 'image') items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
+  if (RECT_ANCHOR.includes(n.type)) items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
   if (doc.wires.some(w => w.from === n.id)) {
     items.push({ label: 'Cor do ramo', swatches: BRANCH_COLORS.map(c => ({ color: c, action: () => colorBranch(n, c) })) });
     items.push({ label: 'Limpar cor do ramo', action: () => colorBranch(n, null) });
