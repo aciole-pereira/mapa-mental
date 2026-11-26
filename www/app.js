@@ -255,6 +255,10 @@ function reshape(n, fn) {
   n.x = Math.round(cx - n.w / 2); n.y = Math.round(cy - n.h / 2);
   remapEnds(n, old);
 }
+function formCmd(form) {
+  if (!selectedNodes().some(n => n.type === 'idea')) return toast('Selecione uma ou mais ideias para trocar o formato');
+  setForm(form);
+}
 function setForm(form) {
   const ns = selectedNodes().filter(n => n.type === 'idea' && !n.locked);
   if (!ns.length) return;
@@ -438,7 +442,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v41';
+const APP_VERSION = 'v42';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -2959,6 +2963,13 @@ const ICON = {
   grid: svg(`<rect x="3" y="3" width="18" height="18" fill="#D4D0C8" stroke="#333"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="#777"/>`),
   snap: svg(`<path d="M5.5 3v9a6.5 6.5 0 0 0 13 0V3h-4.5v9a2 2 0 0 1-4 0V3z" fill="#C42020" stroke="#5A0000"/><path d="M5.5 3H10v3.5H5.5zM14 3h4.5v3.5H14z" fill="#E4E4E4" stroke="#555"/>`),
   select: svg(`<rect x="2.5" y="2.5" width="14" height="12" fill="#7AB52E22" stroke="#3D8B0A" stroke-dasharray="2.5 2"/><path d="M11 9l10 4.5-4.3 1.5L15 19.5z" fill="#fff" stroke="#222"/>`),
+  'f-rect': svg(comp('#C8C8C8')),
+  'f-square': svg(`<rect x="4" y="4" width="16" height="16" rx="2" fill="#C8C8C8" stroke="#222" stroke-width="1.2"/>`),
+  'f-circle': svg(`<circle cx="12" cy="12" r="8.5" fill="#C8C8C8" stroke="#222" stroke-width="1.2"/>`),
+  'f-triangle': svg(`<path d="M12 3.5l9 16H3z" fill="#C8C8C8" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>`),
+  'f-diamond': svg(`<path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z" fill="#C8C8C8" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>`),
+  'f-star': svg(`<path d="M12 2.5l2.7 6.1 6.6.6-5 4.4 1.5 6.5L12 16.7l-5.8 3.4 1.5-6.5-5-4.4 6.6-.6z" fill="#C8C8C8" stroke="#222" stroke-width="1.1" stroke-linejoin="round"/>`),
+  'f-edit': svg(`<circle cx="12" cy="12" r="7" fill="#C8C8C8" stroke="#222" stroke-width="1.1"/><circle cx="12" cy="5" r="2.3" fill="#9BD04A" stroke="#222"/><circle cx="19" cy="12" r="2.3" fill="#9BD04A" stroke="#222"/><circle cx="12" cy="19" r="2.3" fill="#9BD04A" stroke="#222"/><circle cx="5" cy="12" r="2.3" fill="#9BD04A" stroke="#222"/>`),
 };
 const RIBBON = {
   criar: { label: 'Criar', groups: [
@@ -2971,6 +2982,7 @@ const RIBBON = {
   editar: { label: 'Editar', groups: [
     ['Histórico', [['undo', 'Desfazer', 'Desfazer (Ctrl+Z)'], ['redo', 'Refazer', 'Refazer (Ctrl+Y)'], ['history', 'Versões', 'Histórico de versões']]],
     ['Seleção', [['dup', 'Duplicar', 'Duplicar (Ctrl+D)'], ['disconnect', 'Desconectar', 'Remover fios da seleção'], ['del', 'Excluir', 'Excluir (Delete)'], ['lock', 'Travar', 'Travar / destravar (Ctrl+L)'], ['find', 'Buscar', 'Buscar no mapa (Ctrl+F)']]],
+    ['Formato', [['f-rect', 'Padrão', 'Formato padrão (Grasshopper)'], ['f-square', 'Quadrado'], ['f-circle', 'Círculo'], ['f-triangle', 'Triângulo'], ['f-diamond', 'Losango'], ['f-star', 'Estrela'], ['f-edit', 'Bolinhas', 'Editar as bolinhas de conexão da pilha selecionada']]],
     ['Estado', [['st-normal', 'Normal'], ['st-warning', 'Aviso'], ['st-error', 'Erro'], ['st-disabled', 'Desativ.', 'Desativado']]],
     ['Mapa', [['arrange', 'Organizar', 'Organizar ideias em árvore']]],
   ] },
@@ -2996,6 +3008,16 @@ const CMD = {
   link: () => createSpecial('link', viewCenter()),
   image: () => createSpecial('image', viewCenter()),
   undo, redo, dup: duplicate, del: deleteSelection, disconnect,
+  'f-rect': () => formCmd(''), 'f-square': () => formCmd('square'), 'f-circle': () => formCmd('circle'),
+  'f-triangle': () => formCmd('triangle'), 'f-diamond': () => formCmd('diamond'), 'f-star': () => formCmd('star'),
+  'f-edit': () => {
+    // com várias selecionadas, edita a primeira; as outras ficam prontas para "Aplicar a…"
+    const ideas = selectedNodes().filter(n => n.type === 'idea');
+    if (!ideas.length) return toast('Selecione uma ideia para editar as bolinhas');
+    const n = ideas.find(isFormed);
+    if (!n) return toast('Primeiro escolha um formato (quadrado, círculo, triângulo, losango ou estrela)');
+    startAnchorEdit(n);
+  },
   'st-normal': () => setState('normal'), 'st-warning': () => setState('warning'),
   'st-error': () => setState('error'), 'st-disabled': () => setState('disabled'),
   arrange,
