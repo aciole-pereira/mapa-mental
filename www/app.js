@@ -459,7 +459,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v45';
+const APP_VERSION = 'v46';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -2654,13 +2654,14 @@ function finishWire(g, w, sp) {
     doc.wires.push(side === 'out' ? { id: uid(), from: src.id, to: n.id, fp: idx, tp: 0 } : { id: uid(), from: n.id, to: src.id, fp: 0, tp: idx });
     changed();
   };
-  const opt = (label, type) => ({ label, action: () => createSpecial(type, at, '', connect) });
+  // mesmos ícones da busca rápida e da faixa de ferramentas
+  const opt = (label, type) => ({ label, icon: ICON[type], action: () => createSpecial(type, at, '', connect) });
   showMenu(sp.x, sp.y, [
-    opt('💡 Ideia', 'idea'),
-    opt('☑ Lista de tarefas', 'check'),
-    opt('📝 Painel de notas', 'panel'),
-    opt('🔗 Link', 'link'),
-    opt('🖼 Imagem', 'image'),
+    opt('Ideia', 'idea'),
+    opt('Lista de tarefas', 'check'),
+    opt('Painel de notas', 'panel'),
+    opt('Link', 'link'),
+    opt('Imagem', 'image'),
   ]);
   pendingWire = { node: src, side, idx, at };
 }
@@ -2785,8 +2786,8 @@ function fillMenu(menu, items) {
       menu.append(row);
       continue;
     }
-    const b = el('button', 'mi' + (it.danger ? ' danger' : ''));
-    b.innerHTML = `<span>${esc(it.label)}</span>${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}`;
+    const b = el('button', 'mi' + (it.danger ? ' danger' : '') + (it.icon ? ' rbi' : ''));
+    b.innerHTML = (it.icon || '') + `<span>${esc(it.label)}</span>${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}`;
     b.disabled = !!it.disabled;
     b.addEventListener('click', () => { hideMenus(); it.action(); });
     menu.append(b);
@@ -3118,6 +3119,28 @@ function openDrop(btn, name) {
   btn.classList.add('open');
   openMenuBtn = btn;
 }
+// setinha da faixa preta de cada painel: lista com ícone e nome de cada função (como no Grasshopper)
+function openGroupDrop(lb, g) {
+  hideMenus();
+  if (openMenuBtn) openMenuBtn.classList.remove('open');
+  const drop = $('#dropmenu');
+  drop.innerHTML = '';
+  for (const rb of g.querySelectorAll('.rb')) {
+    const cmd = rb.dataset.cmd;
+    const it = el('button', 'mi rbi' + (rb.classList.contains('on') ? ' on' : ''));
+    it.innerHTML = (ICON[cmd] || '<span class="noico"></span>') + `<span>${esc(rb.querySelector('span') ? rb.querySelector('span').textContent : cmd)}</span>`;
+    it.title = rb.title;
+    it.disabled = rb.disabled;
+    it.addEventListener('click', () => { closeDrop(); if (editing) commitEdit(); hideMenus(); if (CMD[cmd]) CMD[cmd](rb); });
+    drop.append(it);
+  }
+  drop.style.display = 'block';
+  const r = lb.getBoundingClientRect();
+  drop.style.left = Math.max(4, Math.min(r.left, innerWidth - drop.offsetWidth - 4)) + 'px';
+  drop.style.top = r.bottom + 'px';
+  lb.classList.add('open');
+  openMenuBtn = lb;
+}
 function buildMenus() {
   const nav = $('#menus');
   for (const name of Object.keys(MENUS)) {
@@ -3126,7 +3149,7 @@ function buildMenus() {
     b.addEventListener('mouseenter', () => { if (openMenuBtn && openMenuBtn !== b) openDrop(b, name); });
     nav.append(b);
   }
-  document.addEventListener('pointerdown', e => { if (openMenuBtn && !e.target.closest('#dropmenu, #menus')) closeDrop(); });
+  document.addEventListener('pointerdown', e => { if (openMenuBtn && !e.target.closest('#dropmenu, #menus, .rgroup .label')) closeDrop(); });
 }
 function showHelp() {
   $('#modalTitle').textContent = 'Atalhos e dicas';
@@ -3185,7 +3208,10 @@ function buildRibbon() {
         bt.innerHTML = (ICON[cmd] || '') + `<span>${esc(lbl)}</span>`;
         b.append(bt);
       }
-      g.append(b, el('div', 'label', gl));
+      const lb = el('div', 'label', gl);
+      lb.title = 'Mostrar a lista de ' + gl;
+      lb.addEventListener('click', e => { e.stopPropagation(); openMenuBtn === lb ? closeDrop() : openGroupDrop(lb, g); });
+      g.append(b, lb);
       p.append(g);
     }
     panels.append(p);

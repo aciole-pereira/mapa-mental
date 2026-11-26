@@ -153,6 +153,12 @@ button { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 .rgroup .label::after { content: '▾'; position: absolute; right: 4px; font-size: 9px; color: #CFCFCF; }
+.rgroup .label { cursor: pointer; user-select: none; }
+.rgroup .label:hover, .rgroup .label.open { background: linear-gradient(#5E5E5E, #3C3C3C); }
+.rgroup .label:hover::after, .rgroup .label.open::after { color: #FFF; }
+
+.mi.rbi svg, .mi.rbi .noico { width: 20px; height: 20px; flex: none; display: block; }
+#dropmenu .mi.rbi.on { background: var(--green-soft); }
 
 .rb {
   display: flex;
@@ -328,6 +334,8 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .menu .mi:hover { background: var(--green-soft); }
+/* itens com ícone: o ícone fica na faixa cinza da esquerda */
+.menu .mi.rbi { align-items: center; justify-content: flex-start; gap: 12px; padding-left: 4px !important; }
 .menu .mi:disabled { opacity: .4; }
 .menu .mi.danger span { color: #A40000; }
 .menu kbd { font: 11px var(--font); color: var(--muted); }
