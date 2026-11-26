@@ -461,7 +461,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v49';
+const APP_VERSION = 'v50';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -1114,10 +1114,31 @@ function drawAlign(g) {
     g.stroke();
   }
 }
+// Blocos para alinhar: cada grupo selecionado anda inteiro (pela moldura dele) e cada objeto solto
+// anda sozinho. Com um único grupo selecionado (e nada mais), alinha os objetos de dentro dele.
+function alignUnits() {
+  const ns = selectedNodes();
+  const groups = ns.filter(n => n.type === 'group' && !n.locked);
+  const taken = new Set(), units = [];
+  // grupos maiores primeiro: um grupo dentro de outro selecionado vai junto com o de fora
+  groups.sort((a, b) => b.w * b.h - a.w * a.h);
+  for (const g of groups) {
+    if (taken.has(g.id)) continue;
+    const ids = groupMembersDeep(g);
+    const members = [...ids].map(byId).filter(m => m && m.type !== 'group' && !m.locked && !taken.has(m.id));
+    for (const id of ids) taken.add(id);
+    taken.add(g.id);
+    if (members.length) units.push({ x: g.x, y: g.y, w: g.w, h: g.h, nodes: members });
+  }
+  for (const n of ns) if (n.type !== 'group' && !n.locked && !taken.has(n.id)) units.push({ x: n.x, y: n.y, w: n.w, h: n.h, nodes: [n] });
+  if (units.length === 1 && groups.length === 1 && ns.length === 1) return alignItems().filter(n => !n.locked).map(n => ({ x: n.x, y: n.y, w: n.w, h: n.h, nodes: [n] }));
+  return units;
+}
 function doAlign(act) {
-  const items = alignItems().filter(n => !n.locked);
+  const items = alignUnits();
   if (items.length < 2) return toast('Objetos travados não são alinhados');
   checkpoint();
+  for (const u of items) { u.x0 = u.x; u.y0 = u.y; }
   const bb = bbox(items);
   if (act === 'left') items.forEach(n => (n.x = bb.x));
   else if (act === 'right') items.forEach(n => (n.x = bb.x + bb.w - n.w));
@@ -1134,6 +1155,11 @@ function doAlign(act) {
     const gap = ((last[p] + last[s]) - first[p] - total) / (sorted.length - 1);
     let cur = first[p];
     for (const n of sorted) { n[p] = cur; cur += n[s] + gap; }
+  }
+  // aplica o deslocamento de cada bloco aos objetos dele
+  for (const u of items) {
+    const ddx = u.x - u.x0, ddy = u.y - u.y0;
+    if (ddx || ddy) for (const n of u.nodes) { n.x += ddx; n.y += ddy; }
   }
   changed();
   toast(ALIGN_LABEL[act]);
