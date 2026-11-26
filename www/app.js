@@ -178,7 +178,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v38';
+const APP_VERSION = 'v39';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -265,7 +265,7 @@ function normalize(d) {
       if (o.type === 'idea' && n.icon) o.icon = String(n.icon).slice(0, 8);
       if (o.type === 'idea' && n.layout && typeof n.layout === 'object') {
         const lay = {};
-        for (const [k, v] of Object.entries(n.layout).slice(0, 500)) if (Array.isArray(v) && isFinite(v[0]) && isFinite(v[1])) lay[String(k).slice(0, 64)] = [+v[0], +v[1]];
+        for (const [k, v] of Object.entries(n.layout).slice(0, 500)) if (Array.isArray(v) && isFinite(v[0]) && isFinite(v[1])) lay[String(k).slice(0, 64)] = v.length > 2 ? [+v[0], +v[1], v[2] ? 1 : 0] : [+v[0], +v[1]];
         if (Object.keys(lay).length) o.layout = lay;
       }
       if (o.type === 'shape') { o.shape = SHAPES[n.shape] ? n.shape : 'rect'; o.color = isHex(n.color) ? n.color : SHAPE_COLORS[1]; o.w = Math.max(40, o.w || 160); o.h = Math.max(30, o.h || 90); }
@@ -5077,16 +5077,21 @@ function updateCrumbs() {
 
 // ---------- Arrumação própria de cada pasta
 // As ideias do CAMINHO (que pertencem ao nível de fora) podem ser reposicionadas
-// dentro da pasta sem mudar o mapa de fora: a pasta guarda as posições em
-// pasta.layout = { id: [x, y] }. Enquanto a pasta está aberta, essas ideias são
-// deslocadas na memória; tudo o que é salvo/enviado usa a posição ORIGINAL.
-let folderSwap = new Map();        // id → { obj, x, y }  (x,y = posição original)
+// e travadas/destravadas dentro da pasta sem mudar o mapa de fora: a pasta guarda
+// pasta.layout = { id: [x, y, travado(1/0)] }. Enquanto a pasta está aberta, essas
+// ideias são alteradas só na memória; tudo o que é salvo/enviado usa o ORIGINAL.
+let folderSwap = new Map();        // id → { obj, x, y, locked }  (estado original)
+function setLock(n, v) { if (v) n.locked = true; else delete n.locked; }
 function persistNodes() {
   if (!folderSwap.size) return doc.nodes;
-  return doc.nodes.map(n => { const e = folderSwap.get(n.id); return e && e.obj === n ? { ...n, x: e.x, y: e.y } : n; });
+  return doc.nodes.map(n => {
+    const e = folderSwap.get(n.id);
+    if (!e || e.obj !== n) return n;
+    const o = { ...n, x: e.x, y: e.y }; setLock(o, e.locked); return o;
+  });
 }
 function restoreSwap() {
-  for (const [id, e] of folderSwap) { const n = byId(id); if (n && n === e.obj) { n.x = e.x; n.y = e.y; } }
+  for (const [id, e] of folderSwap) { const n = byId(id); if (n && n === e.obj) { n.x = e.x; n.y = e.y; setLock(n, e.locked); } }
   folderSwap = new Map();
 }
 function syncFolderLayout() {
@@ -5098,25 +5103,25 @@ function syncFolderLayout() {
     if (isHidden(n) || n.parent === F.id) continue;   // só o caminho (nível de fora)
     keep.add(n.id);
     const e = folderSwap.get(n.id);
+    const q = lay[n.id];
     if (!e || e.obj !== n) {
-      // entrando (ou o objeto foi trocado por desfazer/nuvem): guarda o original e aplica a arrumação da pasta
-      folderSwap.set(n.id, { obj: n, x: n.x, y: n.y });
-      const q = lay[n.id];
-      if (q) { n.x = q[0]; n.y = q[1]; }
+      // entrando (ou o objeto foi trocado por desfazer/nuvem): guarda o original e aplica o estado da pasta
+      folderSwap.set(n.id, { obj: n, x: n.x, y: n.y, locked: !!n.locked });
+      if (q) { n.x = q[0]; n.y = q[1]; if (q.length > 2) setLock(n, !!q[2]); }
     } else {
-      // já estava aplicado: se mudou de lugar aqui dentro, grava na pasta
-      const q = lay[n.id], cx = q ? q[0] : e.x, cy = q ? q[1] : e.y;
-      if (Math.abs(n.x - cx) > 0.01 || Math.abs(n.y - cy) > 0.01) {
+      // já estava aplicado: se mudou aqui dentro (lugar ou trava), grava na pasta
+      const cx = q ? q[0] : e.x, cy = q ? q[1] : e.y, cl = q && q.length > 2 ? !!q[2] : e.locked;
+      if (Math.abs(n.x - cx) > 0.01 || Math.abs(n.y - cy) > 0.01 || !!n.locked !== cl) {
         if (!F.layout) F.layout = {};
-        F.layout[n.id] = [Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10];
+        F.layout[n.id] = [Math.round(n.x * 10) / 10, Math.round(n.y * 10) / 10, n.locked ? 1 : 0];
       }
     }
   }
-  // o que deixou de ser caminho volta ao lugar original
+  // o que deixou de ser caminho volta ao original
   for (const [id, e] of [...folderSwap]) {
     if (keep.has(id)) continue;
     const n = byId(id);
-    if (n && n === e.obj) { n.x = e.x; n.y = e.y; }
+    if (n && n === e.obj) { n.x = e.x; n.y = e.y; setLock(n, e.locked); }
     folderSwap.delete(id);
   }
 }
