@@ -461,7 +461,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v48';
+const APP_VERSION = 'v49';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -1657,6 +1657,28 @@ function draw() {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+  if (gs && gs.mode === 'split') {
+    // linha do corte e faixa do espaço aberto (atravessa a tela toda)
+    const tl = toWorld(0, 0), br = toWorld(W, H);
+    ctx.save();
+    ctx.lineWidth = 1.5 / view.z;
+    ctx.strokeStyle = WIRE_SEL;
+    ctx.setLineDash([6 / view.z, 4 / view.z]);
+    ctx.beginPath();
+    if (gs.axis === 'y') { ctx.moveTo(tl.x, gs.wy); ctx.lineTo(br.x, gs.wy); }
+    else { ctx.moveTo(gs.wx, tl.y); ctx.lineTo(gs.wx, br.y); }
+    ctx.stroke();
+    if (gs.axis && gs.splitD) {
+      const a = gs.axis === 'x' ? gs.wx : gs.wy, b = a + gs.splitD;
+      ctx.fillStyle = 'rgba(80,140,30,.10)';
+      if (gs.axis === 'x') ctx.fillRect(Math.min(a, b), tl.y, Math.abs(b - a), br.y - tl.y);
+      else ctx.fillRect(tl.x, Math.min(a, b), br.x - tl.x, Math.abs(b - a));
+      ctx.beginPath();
+      if (gs.axis === 'x') { ctx.moveTo(b, tl.y); ctx.lineTo(b, br.y); } else { ctx.moveTo(tl.x, b); ctx.lineTo(br.x, b); }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   if (gs && gs.moved && gs.mode === 'move' && gs.guides) {
     const gd = gs.guides;
     ctx.save();
@@ -2387,6 +2409,29 @@ function dragCopy(g) {
   g.unselectOnClick = false;
   computeHidden();
 }
+// Alt + arrastar: a direção (horizontal ou vertical) é decidida no começo do arraste; os objetos
+// cujo centro está do lado para onde se arrasta acompanham o mouse só nesse eixo
+// soltar o Alt sozinho no Windows leva o foco para o menu do navegador: aqui ele fica no mapa
+document.addEventListener('keyup', e => { if (e.key === 'Alt') e.preventDefault(); });
+function splitMove(g, w) {
+  const dx = w.x - g.wx, dy = w.y - g.wy;
+  if (!g.axis) {
+    g.axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+    const k = g.axis, at = k === 'x' ? g.wx : g.wy, sign = (k === 'x' ? dx : dy) >= 0 ? 1 : -1;
+    g.sign = sign;
+    g.starts = new Map();
+    for (const n of doc.nodes) {
+      if (n.type === 'group' || n.locked || isHidden(n)) continue;
+      const c = k === 'x' ? n.x + n.w / 2 : n.y + n.h / 2;
+      if ((c - at) * sign > 0) g.starts.set(n.id, { x: n.x, y: n.y });
+    }
+  }
+  let d = g.axis === 'x' ? dx : dy;
+  if (settings.snap) d = Math.round(d / GRID) * GRID;
+  for (const [id, s] of g.starts) { const n = byId(id); if (n) { if (g.axis === 'x') n.x = s.x + d; else n.y = s.y + d; } }
+  g.splitD = d;
+  broadcastMove(g.starts);
+}
 function moveSet() {
   const ids = new Set(sel);
   for (const g of doc.nodes) {
@@ -2429,6 +2474,9 @@ canvas.addEventListener('pointerdown', e => {
   if (anchorEdit && e.button === 0 && h.kind !== 'anchor' && h.kind !== 'compass' && !(h.node && h.node.id === anchorEdit.id)) endAnchorEdit();
   if (e.button === 0 && presenting) { g.mode = 'pan'; g.vx = view.x; g.vy = view.y; g.present = true; return; }
   if (e.button === 0 && tool === 'pen' && canEdit() && h.kind !== 'compass') { g.mode = 'draw'; g.pts = [[w.x, w.y]]; render(); return; }
+  // Alt + arrastar (como no Grasshopper): corta a tela no ponto do clique e empurra tudo o que está
+  // do lado para onde se arrasta, abrindo ou fechando espaço
+  if (e.button === 0 && e.altKey && canEdit() && h.kind !== 'compass') { e.preventDefault(); g.mode = 'split'; g.axis = null; sel.clear(); selWire = null; render(); return; }
   if (e.button === 0 && voteMode && h.node && h.node.type !== 'group' && h.kind !== 'compass') { g.mode = 'vote'; return; }
 
   if (e.button === 1 || e.button === 2) { e.preventDefault(); g.mode = 'pan'; g.vx = view.x; g.vy = view.y; return; }
@@ -2512,6 +2560,7 @@ canvas.addEventListener('pointermove', e => {
     clearTimeout(longTimer);
     if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') checkpoint();
     if (g.mode === 'move' && g.copy) dragCopy(g);
+    if (g.mode === 'split') checkpoint();
   }
   const w = toWorld(p.x, p.y);
   switch (g.mode) {
@@ -2522,6 +2571,7 @@ canvas.addEventListener('pointermove', e => {
     }
     case 'pan':
       view.x = g.vx + dx; view.y = g.vy + dy; break;
+    case 'split': splitMove(g, w); break;
     case 'move': {
       let ddx = w.x - g.wx, ddy = w.y - g.wy;
       if (settings.snap && g.starts.has(g.anchor.id)) {
@@ -2590,7 +2640,7 @@ function endPointer(e, cancelled) {
   const w = toWorld(p.x, p.y);
   if (cancelled) {
     hideTrash();
-    if (g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor')) changed();
+    if (g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor' || g.mode === 'split')) changed();
     return render();
   }
   if (g.mode === 'draw') { finishStroke(g); return; }
@@ -2600,7 +2650,7 @@ function endPointer(e, cancelled) {
   hideTrash();
   if (g.mode === 'move' && g.moved && g.overTrash) { dropInTrash(g); updateStatus(); return; }
   if (g.moved) {
-    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') changed();
+    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor' || g.mode === 'split') changed();
     else if (g.mode === 'pan') scheduleSave(true);
     else if (g.mode === 'wire') finishWire(g, w, p);
   } else if (g.button === 0) {
@@ -3205,6 +3255,7 @@ function showHelp() {
     ['💬 Comentar', 'botão direito num objeto; use @ para mencionar alguém'],
     ['3 cliques numa ideia', 'entra nela como pasta (Esc ou ← Sair volta)'],
     ['Ctrl + arrastar', 'arrasta uma cópia do que está selecionado'],
+    ['Alt + arrastar', 'empurra tudo o que está daquele lado (abre ou fecha espaço, como no Grasshopper)'],
     ['Ctrl+Z / Ctrl+Y', 'desfazer / refazer'], ['Ctrl+G', 'agrupar'], ['F', 'ajustar à tela'],
   ].map(([k, v]) => `<li><b>${k}</b>: ${v}</li>`).join('') + '</ul>';
   openOverlay('#modal');
