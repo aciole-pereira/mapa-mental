@@ -459,11 +459,12 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v44';
+const APP_VERSION = 'v45';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
 let sel = new Set();
+let pendingWire = null;      // fio solto no vazio esperando a escolha no menu (some quando o menu fecha)
 let selWire = null;
 let past = [], future = [];
 let idMap = null;
@@ -1639,6 +1640,17 @@ function draw() {
       ctx.stroke();
     }
   }
+  if (pendingWire && byId(pendingWire.node.id)) {
+    const q = pendingWire, p = q.side === 'out' ? curve(gripOut(q.node, q.idx), q.at) : curve(q.at, gripIn(q.node, q.idx));
+    ctx.beginPath();
+    ctx.moveTo(p[0].x, p[0].y);
+    ctx.bezierCurveTo(p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y);
+    ctx.setLineDash([8 / view.z, 5 / view.z]);
+    ctx.lineWidth = Math.max(2.5, 1.5 / view.z);
+    ctx.strokeStyle = WIRE_SEL;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   if (gs && gs.moved && gs.mode === 'move' && gs.guides) {
     const gd = gs.guides;
     ctx.save();
@@ -1846,8 +1858,10 @@ function addWire(a, b, fp = 0, tp = 0) {
 }
 
 // ---------- nós especiais
-function createSpecial(type, at, text = '') {
+// then(n): chamado logo depois de criar (ex.: ligar no fio que foi solto no vazio)
+function createSpecial(type, at, text = '', then = null) {
   if (editing) commitEdit();
+  const done = (n, edit) => { if (then) then(n); if (edit) startEdit(n, true); return n; };
   if (type === 'image') {
     pickImage((src, iw, ih) => {
       const n = addNodeAt('image', at.x, at.y, text, false);
@@ -1855,6 +1869,7 @@ function createSpecial(type, at, text = '') {
       n.h = n.w * ih / iw;
       n.y = at.y - n.h / 2;
       changed();
+      done(n);
     });
     return;
   }
@@ -1869,16 +1884,17 @@ function createSpecial(type, at, text = '') {
     measure(n);
     n.x = at.x - n.w / 2;
     changed();
+    done(n);
     return;
   }
   if (type === 'check') {
-    addNodeAt('check', at.x, at.y, text, false);
+    done(addNodeAt('check', at.x, at.y, text, false));
     toast('Duplo clique para editar: 1ª linha é o título, uma tarefa por linha');
     return;
   }
-  if (type === 'comp') { addNodeAt('comp', at.x, at.y, text || 'Componente', !text); return; }
+  if (type === 'comp') { done(addNodeAt('comp', at.x, at.y, text || 'Componente', false), !text); return; }
   if (type === 'group') return groupSelection();
-  addNodeAt(type, at.x, at.y, text, !text);
+  done(addNodeAt(type, at.x, at.y, text, false), !text);
 }
 function pickImage(cb) {
   const inp = $('#imageFile');
@@ -2547,7 +2563,7 @@ function endPointer(e, cancelled) {
   if (g.moved) {
     if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') changed();
     else if (g.mode === 'pan') scheduleSave(true);
-    else if (g.mode === 'wire') finishWire(g, w);
+    else if (g.mode === 'wire') finishWire(g, w, p);
   } else if (g.button === 0) {
     if (g.mode === 'pan') { sel.clear(); selWire = null; }
     if (g.mode === 'move' && !g.add) sel = new Set([g.hit.node.id]);
@@ -2618,7 +2634,7 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 document.addEventListener('gesturestart', e => e.preventDefault());
 
-function finishWire(g, w) {
+function finishWire(g, w, sp) {
   const need = g.side === 'out' ? 'in' : 'out';
   const t = nodeAtForWire(w, g.node, need);
   if (t) {
@@ -2626,19 +2642,29 @@ function finishWire(g, w) {
     g.side === 'out' ? addWire(g.node, t, g.idx, ti) : addWire(t, g.node, ti, g.idx);
     return;
   }
-  // soltou no vazio: cria uma ideia já conectada
+  // soltou no vazio: pergunta o que criar ali, já conectado (o fio fica tracejado esperando)
   if (editing) commitEdit();
-  checkpoint();
-  const n = makeNode('idea', 0, 0, '');
-  n.y = w.y - n.h / 2;
-  n.x = g.side === 'out' ? w.x : w.x - n.w;
-  snapNode(n);
-  doc.nodes.push(n);
-  doc.wires.push(g.side === 'out' ? { id: uid(), from: g.node.id, to: n.id, fp: g.idx, tp: 0 } : { id: uid(), from: n.id, to: g.node.id, fp: 0, tp: g.idx });
-  sel = new Set([n.id]); selWire = null;
-  changed();
-  startEdit(n, true);
+  const src = g.node, side = g.side, idx = g.idx, at = { x: w.x, y: w.y };
+  const connect = n => {
+    if (!n || !byId(n.id) || !byId(src.id)) return;
+    measure(n);
+    n.y = at.y - n.h / 2;
+    n.x = side === 'out' ? at.x : at.x - n.w;
+    snapNode(n);
+    doc.wires.push(side === 'out' ? { id: uid(), from: src.id, to: n.id, fp: idx, tp: 0 } : { id: uid(), from: n.id, to: src.id, fp: 0, tp: idx });
+    changed();
+  };
+  const opt = (label, type) => ({ label, action: () => createSpecial(type, at, '', connect) });
+  showMenu(sp.x, sp.y, [
+    opt('💡 Ideia', 'idea'),
+    opt('☑ Lista de tarefas', 'check'),
+    opt('📝 Painel de notas', 'panel'),
+    opt('🔗 Link', 'link'),
+    opt('🖼 Imagem', 'image'),
+  ]);
+  pendingWire = { node: src, side, idx, at };
 }
+
 
 function onDoubleTap(p, w, hit) {
   const an = anchorEdit && anchorNode();
@@ -2737,6 +2763,7 @@ searchInput.addEventListener('blur', () => setTimeout(() => { if (document.activ
 // ---------------------------------------------------------------- menu de contexto
 function hideMenus() {
   menu.style.display = 'none';
+  if (pendingWire) { pendingWire = null; render(); }
   if (searchBox.style.display === 'block') closeSearch();
 }
 function fillMenu(menu, items) {
