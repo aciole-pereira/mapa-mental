@@ -459,7 +459,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v43';
+const APP_VERSION = 'v44';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -4549,6 +4549,7 @@ function updateCloudUi() {
   acc.title = me ? `Conectado como ${me.email}` : 'Entrar para sincronizar e compartilhar';
   acc.classList.toggle('in', !!me);
   cb.hidden = !isCloudMap();
+  $('#syncBtn').hidden = !isCloudMap() || !me;
   const role = myRole();
   $('#roleBadge').hidden = !isCloudMap() || role === 'owner';
   $('#roleBadge').textContent = ROLE_LABEL[role] || '';
@@ -4782,6 +4783,19 @@ function scheduleCloudSave() {
 async function cloudSave() {
   if (!isCloudMap() || !sb || !me || !canEdit() || cloud.saving) return;
   if (!doc.dirty) return;
+  // o envio grava o mapa inteiro: se outro aparelho salvou algo que ainda não chegou aqui,
+  // junta primeiro (senão as mudanças dele seriam apagadas)
+  if (cloud.serverAt && navigator.onLine) {
+    const id0 = doc.id;
+    const { data: h } = await sb.from('maps').select('updated_at').eq('id', id0).maybeSingle();
+    if (!doc || doc.id !== id0 || cloud.saving) return;
+    if (h && h.updated_at !== cloud.serverAt) {
+      if (editing || gesture || pinch || pulling) { scheduleCloudSave(); return; }   // termina de mexer e tenta de novo
+      await cloudPull();
+      if (!doc || doc.id !== id0 || cloud.saving || !doc.dirty) return;
+      if (cloud.serverAt !== h.updated_at) { scheduleCloudSave(); return; }       // não conseguiu juntar ainda
+    }
+  }
   const target = doc;
   const sentKey = JSON.stringify(target.dirty); // o que estava pendente quando o envio começou
   cloud.saving = true;
@@ -4790,8 +4804,9 @@ async function cloudSave() {
   const q = target.role === 'owner'
     ? sb.from('maps').upsert({ id: target.id, owner: me.id, ...payload })
     : sb.from('maps').update(payload).eq('id', target.id);
-  const { error } = await q;
+  const { data: saved, error } = await q.select('updated_at');
   cloud.saving = false;
+  if (!error && saved && saved[0] && doc === target) cloud.serverAt = saved[0].updated_at;
   if (error) {
     setSaveState(navigator.onLine ? 'Erro ao salvar na nuvem (salvo no aparelho)' : 'Sem internet — salvo no aparelho');
     clearTimeout(cloud.saveT);
@@ -4843,6 +4858,7 @@ async function openCloudMap(id) {
   idx[id] = { name: d.name, updated: d.updated };
   saveJSON(IDX, idx);
   openMap(id);
+  cloud.serverAt = data.updated_at;
   if (merged.dirty && canEdit()) scheduleCloudSave();
   return true;
 }
@@ -4866,6 +4882,7 @@ function mergeWithLocal(server, local) {
 // Ao abrir qualquer mapa (chamado por openMap/newMap)
 function cloudOnOpen() {
   leaveChannel();
+  cloud.serverAt = null;
   cloud.comments = []; cloud.people = [];
   closeComments();
   cloud.last = isCloudMap() ? snapshotState() : null;
@@ -4878,6 +4895,61 @@ async function cloudReopen() {
   flushSave();
   await openCloudMap(doc.id);
 }
+// Busca a versão da nuvem sem reabrir o mapa (mantém pasta, zoom e seleção).
+// O tempo real só entrega o que acontece enquanto o app está conectado; isto cobre
+// o que foi feito em outro aparelho enquanto este estava dormindo, minimizado ou sem internet.
+let pulling = false;
+async function cloudPull(manual = false) {
+  if (!isCloudMap() || !sb || !me) { if (manual) toast(me ? 'Este mapa está só neste aparelho' : 'Entre na sua conta para sincronizar'); return; }
+  if (pulling) return;
+  if (!manual && (editing || gesture || pinch || cloud.saving)) return;   // não atrapalha quem está mexendo
+  const id = doc.id;
+  pulling = true;
+  try {
+    if (!manual) {
+      const { data: h, error: he } = await sb.from('maps').select('updated_at').eq('id', id).maybeSingle();
+      if (he || !h || h.updated_at === cloud.serverAt) return;
+    }
+    if (manual) setSaveState('Atualizando…');
+    const { data, error } = await sb.from('maps').select('name,data,updated_at').eq('id', id).maybeSingle();
+    if (error || !data) { if (manual) { setSaveState('Sem conexão com a nuvem'); toast('Não foi possível atualizar agora'); } return; }
+    if (!doc || doc.id !== id) return;
+    if (!manual && (editing || gesture || pinch)) return;                 // começou a mexer enquanto buscava: tenta na próxima
+    if (manual && editing) commitEdit();
+    cloud.serverAt = data.updated_at;
+    const merged = mergeWithLocal(data, { nodes: persistNodes(), wires: doc.wires, name: doc.name, dirty: doc.dirty });
+    const nd = normalize({ id, name: merged.name, nodes: merged.nodes, wires: merged.wires });
+    // nada de novo? (posições originais dos dois lados, mesmo dentro de uma pasta)
+    if (JSON.stringify([nd.nodes, nd.wires, nd.name]) === JSON.stringify([persistNodes(), doc.wires, doc.name])) {
+      if (manual) { setSaveState(doc.dirty ? 'Salvando na nuvem…' : 'Salvo na nuvem'); toast('Já está tudo atualizado'); }
+      return;
+    }
+    cloud.applyingRemote = true;
+    try {
+      doc.nodes = nd.nodes; doc.wires = nd.wires;
+      if (doc.name !== nd.name) { doc.name = nd.name; $('#mapName').value = doc.name; }
+      if (editing && !byId(editing.node.id)) cancelEdit();
+      changed();
+      cloud.last = snapshotState();
+    } finally { cloud.applyingRemote = false; }
+    if (doc.dirty && canEdit()) scheduleCloudSave();
+    else setSaveState('Salvo na nuvem');
+    if (manual) toast('Mapa atualizado com as mudanças da nuvem');
+  } catch (e) {
+    if (manual) toast('Não foi possível atualizar agora');
+  } finally { pulling = false; }
+}
+// ao voltar para o app/janela, e de tempos em tempos enquanto ele está à vista
+let lastPull = 0;
+function pullSoon() {
+  if (document.hidden || Date.now() - lastPull < 3000) return;
+  lastPull = Date.now();
+  cloudPull();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pullSoon(); });
+window.addEventListener('focus', pullSoon);
+window.addEventListener('pageshow', pullSoon);
+setInterval(() => { if (!document.hidden) { lastPull = Date.now(); cloudPull(); } }, 20000);
 // Lista "Meus mapas": mapas deste aparelho + da nuvem (meus e compartilhados comigo)
 async function openDrawer() {
   flushSave();
@@ -4952,11 +5024,12 @@ function cloudOnNew() {
 }
 
 // ---------------------------------------------------------------- tempo real (canal do mapa)
-function joinChannel() {
+function joinChannel(rejoin = false) {
   if (!sb || !me || !isCloudMap()) return;
   const id = doc.id;
   const ch = sb.channel('map:' + id, { config: { private: true, presence: { key: me.id }, broadcast: { self: false } } });
   cloud.channel = ch; cloud.channelMap = id;
+  ch.wasDown = rejoin;
   ch.on('broadcast', { event: 'ops' }, ({ payload }) => applyRemoteOps(id, payload && payload.ops))
     .on('broadcast', { event: 'move' }, ({ payload }) => applyRemoteMove(id, payload))
     .on('presence', { event: 'sync' }, () => {
@@ -4967,13 +5040,31 @@ function joinChannel() {
       render();
     })
     .subscribe(status => {
-      if (status === 'SUBSCRIBED') { trackPresence(); setSaveState(doc.dirty ? 'Salvando na nuvem…' : 'Salvo na nuvem'); }
-      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setSaveState('Tempo real indisponível — salvando na nuvem');
+      if (cloud.channel !== ch) return;
+      if (status === 'SUBSCRIBED') {
+        trackPresence(); setSaveState(doc.dirty ? 'Salvando na nuvem…' : 'Salvo na nuvem');
+        if (ch.wasDown) cloudPull();          // reconectou: busca o que passou enquanto estava fora
+        ch.wasDown = false;
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        ch.wasDown = true;
+        setSaveState('Tempo real indisponível — salvando na nuvem');
+        // tenta entrar de novo no canal daqui a pouco
+        clearTimeout(cloud.rejoinT);
+        cloud.rejoinT = setTimeout(() => {
+          if (cloud.channel !== ch || !isCloudMap() || doc.id !== id) return;
+          cloud.channel = null;
+          try { sb.removeChannel(ch); } catch {}
+          joinChannel(true);
+        }, 5000);
+      }
     });
-  loadComments();
+  if (!rejoin) loadComments();
 }
 function leaveChannel() {
-  if (cloud.channel && sb) { try { sb.removeChannel(cloud.channel); } catch {} }
+  clearTimeout(cloud.rejoinT);
+  const old = cloud.channel;
+  cloud.channel = null;
+  if (old && sb) { try { sb.removeChannel(old); } catch {} }
   cloud.channel = null; cloud.channelMap = null; cloud.peers = new Map();
   if (cloud.commentsSub && sb) { try { sb.removeChannel(cloud.commentsSub); } catch {} }
   cloud.commentsSub = null;
@@ -5326,6 +5417,7 @@ function buildCloud() {
   $('#accountBtn').addEventListener('click', e => accountMenu(e.currentTarget));
   $('#shareBtn').addEventListener('click', showShare);
   $('#commentsBtn').addEventListener('click', () => ($('#comments').hidden ? openComments() : closeComments()));
+  $('#syncBtn').addEventListener('click', () => { flushSave(); cloudPull(true); });
   const p = $('#comments');
   p.querySelector('[data-cx]').addEventListener('click', closeComments);
   p.querySelectorAll('[data-cf]').forEach(b => b.addEventListener('click', () => { cmFilter = b.dataset.cf; renderComments(); }));
