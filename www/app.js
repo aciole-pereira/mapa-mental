@@ -110,27 +110,34 @@ function textWidth(lines, font) {
   for (const l of lines) w = Math.max(w, mctx.measureText(l).width);
   return w;
 }
+// Largura fixa (n.fw): ideias, links e componentes podem ter a largura escolhida pela pessoa
+const WIDE = ['idea', 'link', 'comp'];
+function textMax(n, extra) {
+  if (!n.fw) return IDEA_MAX;
+  const { lw, rw } = compGeom(n);
+  return Math.max(30, n.fw - lw - rw - 24 - (extra || 0));
+}
 function measure(n) {
   const portsH = n.inputs ? Math.max(n.inputs.length, n.outputs.length, 1) * PORT_GAP + 8 : 0;
   if (n.type === 'idea') {
-    const L = wrap(ideaText(n), F.idea, IDEA_MAX);
+    const L = wrap(ideaText(n), F.idea, textMax(n));
     const { lw, rw } = compGeom(n);
-    n.w = Math.max(116, Math.ceil(textWidth(L, F.idea) + lw + rw + 24));
+    n.w = n.fw ? Math.max(lw + rw + 54, n.fw) : Math.max(116, Math.ceil(textWidth(L, F.idea) + lw + rw + 24));
     n.h = Math.max(38, L.length * LH.idea + 18, portsH);
   } else if (n.type === 'scribble') {
     const L = wrap(n.text || ' ', F.scribble, 0);
     n.w = Math.max(40, Math.ceil(textWidth(L, F.scribble)) + 8);
     n.h = L.length * LH.scribble + 6;
   } else if (n.type === 'link') {
-    const L = wrap(linkLabel(n), F.link, IDEA_MAX);
+    const L = wrap(linkLabel(n), F.link, textMax(n, LINK_OPEN));
     const { lw, rw } = compGeom(n);
-    n.w = Math.max(130, Math.ceil(textWidth(L, F.link) + lw + rw + 24 + LINK_OPEN));
+    n.w = n.fw ? Math.max(lw + rw + 54 + LINK_OPEN, n.fw) : Math.max(130, Math.ceil(textWidth(L, F.link) + lw + rw + 24 + LINK_OPEN));
     n.h = Math.max(38, L.length * LH.link + 18, portsH);
   } else if (n.type === 'comp') {
     const { lw, rw } = compGeom(n);
     mctx.font = F.comp;
     const nameW = mctx.measureText(n.text || ' ').width;
-    n.w = Math.ceil(lw + 26 + rw);
+    n.w = Math.max(Math.ceil(lw + 26 + rw), n.fw || 0);
     n.h = Math.ceil(Math.max(Math.max(n.inputs.length, n.outputs.length, 1) * PORT_GAP + 8, nameW + 22, 44));
   } else if (n.type === 'check') {
     let w = textWidth([n.text || ' '], F.checkTitle) + 54;
@@ -178,7 +185,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v39';
+const APP_VERSION = 'v40';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -260,6 +267,7 @@ function normalize(d) {
         if (n.hidden) o.hidden = true;
       }
       if (n.locked) o.locked = true;
+      if (WIDE.includes(o.type) && +n.fw > 0) o.fw = Math.round(clamp(+n.fw, 40, 3000));
       if (n.parent) o.parent = String(n.parent).slice(0, 64);
       if ((n.votes | 0) > 0) o.votes = n.votes | 0;
       if (o.type === 'idea' && n.icon) o.icon = String(n.icon).slice(0, 8);
@@ -635,6 +643,7 @@ function hitTest(wx, wy, touch) {
     if (n.type === 'group' || isHidden(n)) continue;
     if (n.type === 'draw') { if (drawHit(n, wx, wy, tol)) return { kind: 'node', node: n }; continue; }
     if (['panel', 'image', 'shape'].includes(n.type) && !n.locked && dist(wx, wy, n.x + n.w, n.y + n.h) <= tol + 4 / view.z) return { kind: 'resize', node: n };
+    if (WIDE.includes(n.type) && sel.has(n.id) && !n.locked && canEdit() && dist(wx, wy, n.x + n.w - 3 / view.z, n.y + n.h - 3 / view.z) <= tol + 4 / view.z) return { kind: 'width', node: n };
     if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {
       if (n.inputs) {
         const { lw, rw } = compGeom(n);
@@ -1028,7 +1037,7 @@ function drawLink(g, n, isSel, scale, hideText) {
   g.moveTo(cx - 1, cy - 4); g.lineTo(cx + 4, cy - 4); g.lineTo(cx + 4, cy + 1);
   g.stroke();
   if (!hideText && scale > 0.22) {
-    const L = wrap(linkLabel(n), F.link, IDEA_MAX);
+    const L = wrap(linkLabel(n), F.link, textMax(n, LINK_OPEN));
     g.font = F.link;
     g.fillStyle = n.state === 'normal' && !isSel ? '#0B4F9E' : C.io;
     g.strokeStyle = g.fillStyle;
@@ -1151,7 +1160,7 @@ function drawIdea(g, n, isSel, scale, hideText) {
   drawBody(g, n, C, isSel, scale);
   const { lw, rw } = compGeom(n);
   if (!hideText && scale > 0.22) {
-    const L = wrap(ideaText(n), F.idea, IDEA_MAX);
+    const L = wrap(ideaText(n), F.idea, textMax(n));
     g.font = F.idea;
     g.fillStyle = C.io;
     g.textAlign = 'center';
@@ -1267,8 +1276,19 @@ function drawScene(g, o) {
   }
   if (o.zui) { const fc = folderCounts(); if (fc.size) for (const n of doc.nodes) if (n.type === 'idea' && !isHidden(n) && n.id !== currentFolder && fc.get(n.id)) drawFolderBadge(g, n, fc.get(n.id)); }
   if (o.zui && cloud.comments.length) for (const n of doc.nodes) if (n.type !== 'group' && !isHidden(n)) drawCommentBadge(g, n);
+  if (o.zui) for (const n of doc.nodes) if (WIDE.includes(n.type) && selection.has(n.id) && !n.locked && !isHidden(n) && canEdit()) drawWidthGrip(g, n);
   if (o.zui) for (const n of doc.nodes) if (zuiVisible(n)) drawZui(g, n);
   if (o.zui) drawAlign(g);
+}
+
+function drawWidthGrip(g, n) {
+  const k = 1 / view.z, x = n.x + n.w - 3 * k, y = n.y + n.h - 3 * k;
+  g.save();
+  g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 1.2 * k; g.lineCap = 'round';
+  g.beginPath();
+  for (const d of [4, 8]) { g.moveTo(x - d * k, y); g.lineTo(x, y - d * k); }
+  g.stroke();
+  g.restore();
 }
 
 function draw() {
@@ -1843,7 +1863,7 @@ function positionEditor() {
   }
   if (type === 'idea') {
     x += lw; y += 4; w -= lw + rw; h -= 8; align = 'center';
-    const lines = wrap(n.text || ' ', F.idea, IDEA_MAX).length;
+    const lines = wrap(n.text || ' ', F.idea, textMax(n)).length;
     pt = Math.max(0, (h - lines * LH.idea) / 2);
     const S = STATES[n.state] || STATES.normal;
     bg = '#FFFFFF'; color = '#111111';
@@ -1858,7 +1878,7 @@ function positionEditor() {
   }
   else if (type === 'link') {
     x += lw; y += 4; w -= lw + rw + LINK_OPEN; h -= 8; align = 'center';
-    const lines = wrap(linkLabel(n), F.link, IDEA_MAX).length;
+    const lines = wrap(linkLabel(n), F.link, textMax(n, LINK_OPEN)).length;
     pt = Math.max(0, (h - lines * LH.link) / 2);
     bg = '#FFFFFF'; color = '#0B4F9E';
   } else if (type === 'comp') {
@@ -2029,7 +2049,7 @@ function moveSet() {
 function resetPointers() {
   clearTimeout(longTimer);
   const g = gesture;
-  if (g && g.moved && (g.mode === 'move' || g.mode === 'resize')) changed();
+  if (g && g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width')) changed();
   hideTrash();
   ptrs.clear(); pinch = null; gesture = null;
   render();
@@ -2072,6 +2092,11 @@ canvas.addEventListener('pointerdown', e => {
   switch (h.kind) {
     case 'out': case 'in':
       g.mode = 'wire'; g.node = h.node; g.side = h.kind; g.idx = h.idx || 0; g.cur = w; break;
+    case 'width': {
+      g.mode = 'width'; g.node = h.node; g.w0 = h.node.w;
+      g.targets = [...sel].map(byId).filter(n => n && WIDE.includes(n.type) && !n.locked && !isHidden(n));
+      selWire = null; break;
+    }
     case 'resize':
       if (h.node.locked) { sel = new Set([h.node.id]); g.mode = 'none'; break; }
       g.mode = 'resize'; g.node = h.node; g.w0 = h.node.w; g.h0 = h.node.h;
@@ -2104,7 +2129,7 @@ canvas.addEventListener('pointerdown', e => {
         g.cur = w;
       }
   }
-  if (!canEdit() && ['move', 'resize', 'wire'].includes(g.mode)) g.mode = 'none';
+  if (!canEdit() && ['move', 'resize', 'width', 'wire'].includes(g.mode)) g.mode = 'none';
   updateStatus();
   render();
 });
@@ -2126,7 +2151,7 @@ canvas.addEventListener('pointermove', e => {
     if (Math.hypot(dx, dy) < (g.touch ? 8 : 3)) return;
     g.moved = true;
     clearTimeout(longTimer);
-    if (g.mode === 'move' || g.mode === 'resize') checkpoint();
+    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width') checkpoint();
   }
   const w = toWorld(p.x, p.y);
   switch (g.mode) {
@@ -2148,6 +2173,14 @@ canvas.addEventListener('pointermove', e => {
       for (const [id, s] of g.starts) { const n = byId(id); if (n) { n.x = s.x + ddx; n.y = s.y + ddy; } }
       broadcastMove(g.starts);
       updateTrash(p, g);
+      break;
+    }
+    case 'width': {
+      // todas as selecionadas ficam com a mesma largura
+      let nw = g.w0 + (w.x - g.wx);
+      if (settings.snap) nw = Math.round((g.node.x + nw) / GRID) * GRID - g.node.x;
+      nw = Math.max(40, Math.round(nw));
+      for (const t of g.targets) { t.fw = nw; measure(t); }
       break;
     }
     case 'resize': {
@@ -2192,7 +2225,7 @@ function endPointer(e, cancelled) {
   const w = toWorld(p.x, p.y);
   if (cancelled) {
     hideTrash();
-    if (g.moved && (g.mode === 'move' || g.mode === 'resize')) changed();
+    if (g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width')) changed();
     return render();
   }
   if (g.mode === 'draw') { finishStroke(g); return; }
@@ -2202,7 +2235,7 @@ function endPointer(e, cancelled) {
   hideTrash();
   if (g.mode === 'move' && g.moved && g.overTrash) { dropInTrash(g); updateStatus(); return; }
   if (g.moved) {
-    if (g.mode === 'move' || g.mode === 'resize') changed();
+    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width') changed();
     else if (g.mode === 'pan') scheduleSave(true);
     else if (g.mode === 'wire') finishWire(g, w);
   } else if (g.button === 0) {
@@ -2236,12 +2269,12 @@ function updateHover(p) {
   if (hn !== hoverNode) { hoverNode = hn; if (view.z >= ZUI_ZOOM) render(); }
   const nh = h.kind === 'in' || h.kind === 'out' ? { node: h.node, kind: h.kind, idx: h.idx } : null;
   if ((nh && (!hover || hover.node !== nh.node || hover.kind !== nh.kind || hover.idx !== nh.idx)) || (!nh && hover)) { hover = nh; render(); }
-  canvas.style.cursor = h.kind === 'in' || h.kind === 'out' ? 'crosshair' : h.kind === 'resize' ? 'nwse-resize'
+  canvas.style.cursor = h.kind === 'in' || h.kind === 'out' ? 'crosshair' : h.kind === 'resize' ? 'nwse-resize' : h.kind === 'width' ? 'ew-resize'
     : h.kind === 'node' ? 'move' : h.kind === 'param' ? 'text' : ['wire', 'open', 'toggle', 'zui', 'align', 'compass'].includes(h.kind) ? 'pointer' : 'default';
   const zuiHint = h.kind === 'zui' ? (h.minus
     ? `Remover ${h.side === 'in' ? 'entrada' : 'saída'} "${portList(h.node, h.side)[h.at]}"`
     : `Acrescentar ${h.side === 'in' ? 'entrada' : 'saída'}`) : null;
-  const hint = zuiHint ? zuiHint : h.kind === 'compass' ? 'Bússola: clique na direção de uma marca para ir até ela · centro: ajustar à tela' : h.kind === 'align' ? ALIGN_LABEL[h.act] : 'Duplo clique no fundo para criar · arraste das bolinhas para conectar';
+  const hint = zuiHint ? zuiHint : h.kind === 'compass' ? 'Bússola: clique na direção de uma marca para ir até ela · centro: ajustar à tela' : h.kind === 'align' ? ALIGN_LABEL[h.act] : h.kind === 'width' ? 'Arraste para mudar a largura · com várias selecionadas, todas ficam com a mesma largura' : 'Duplo clique no fundo para criar · arraste das bolinhas para conectar';
   if ($('#stHint').textContent !== hint) $('#stHint').textContent = hint;
   if (tool === 'pen') canvas.style.cursor = 'crosshair';
   else if (voteMode && h.node && h.node.type !== 'group') canvas.style.cursor = 'copy';
@@ -2250,7 +2283,7 @@ function updateHover(p) {
 function startPinch() {
   hideTrash();
   clearTimeout(longTimer);
-  if (gesture && gesture.moved && (gesture.mode === 'move' || gesture.mode === 'resize')) changed();
+  if (gesture && gesture.moved && (gesture.mode === 'move' || gesture.mode === 'resize' || gesture.mode === 'width')) changed();
   gesture = null;
   const [a, b] = [...ptrs.values()];
   const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -2446,7 +2479,7 @@ function paramItems(n, hit) {
   return items;
 }
 function openContextMenu(sx, sy, hit, w) {
-  if (['node', 'in', 'out', 'resize', 'open', 'toggle', 'param', 'zui'].includes(hit.kind)) {
+  if (['node', 'in', 'out', 'resize', 'width', 'open', 'toggle', 'param', 'zui'].includes(hit.kind)) {
     const n = hit.node;
     // no grupo, mantém a seleção atual (para "Adicionar seleção ao grupo")
     if (!sel.has(n.id)) { if (n.type === 'group') sel.add(n.id); else sel = new Set([n.id]); selWire = null; }
@@ -3250,9 +3283,19 @@ function extraNodeItems(n) {
   }
   if (n.type === 'group') items.push({ label: 'Ocultar grupo', action: () => setGroupHidden(n, true) });
   if (n.votes) items.push({ label: `Remover voto (${n.votes})`, action: () => castVote(n, true) });
+  {
+    const wide = [...sel].map(byId).filter(m => m && WIDE.includes(m.type) && !m.locked);
+    if (wide.length > 1) items.push({ label: 'Igualar largura', action: () => setWidths(wide, Math.max(...wide.map(m => m.w))) });
+    if (wide.some(m => m.fw)) items.push({ label: 'Largura automática', action: () => setWidths(wide, 0) });
+  }
   items.push({ label: n.locked ? 'Destravar' : 'Travar', key: 'Ctrl+L', action: toggleLock });
   items.push('-');
   return items;
+}
+function setWidths(ns, fw) {
+  checkpoint();
+  for (const m of ns) { if (fw) m.fw = Math.round(fw); else delete m.fw; measure(m); }
+  changed();
 }
 function wireItems(w) {
   return [
