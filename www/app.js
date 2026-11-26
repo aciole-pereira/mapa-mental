@@ -459,7 +459,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v46';
+const APP_VERSION = 'v47';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -2353,6 +2353,34 @@ function dropInTrash(g) {
 function boxRect(g) {
   return { x: Math.min(g.wx, g.cur.x), y: Math.min(g.wy, g.cur.y), w: Math.abs(g.cur.x - g.wx), h: Math.abs(g.cur.y - g.wy) };
 }
+// Ctrl + arrastar: cria a cópia no mesmo lugar (com os fios entre os copiados, membros de grupo
+// e conteúdo de pasta) e passa a arrastar a cópia; o original fica onde estava
+function dragCopy(g) {
+  if (editing) commitEdit();
+  const ns = withMembers(selectedNodes());
+  if (!ns.length) return;
+  const map = new Map(ns.map(n => [n.id, uid()]));
+  const copies = JSON.parse(JSON.stringify(ns)).map(n => {
+    const c = { ...n, id: map.get(n.id) };
+    if (c.parent && map.has(c.parent)) c.parent = map.get(c.parent);
+    else if (currentFolder) c.parent = currentFolder; else delete c.parent;
+    if (c.members) c.members = c.members.map(id => map.get(id)).filter(Boolean);
+    delete c.layout;           // a arrumação própria da pasta original não vale para a cópia
+    return c;
+  });
+  const ids = new Set(ns.map(n => n.id));
+  for (const w of doc.wires) if (ids.has(w.from) && ids.has(w.to)) doc.wires.push({ ...w, id: uid(), from: map.get(w.from), to: map.get(w.to) });
+  doc.nodes.unshift(...copies.filter(c => c.type === 'group'));
+  doc.nodes.push(...copies.filter(c => c.type !== 'group'));
+  idMap = null;
+  const top = copies.filter(c => !c.parent || c.parent === currentFolder);
+  sel = new Set(top.map(c => c.id)); selWire = null;
+  // arrasta tudo o que está à vista neste nível (o conteúdo das pastas copiadas vai junto sem mudar)
+  g.starts = new Map(copies.filter(c => !(c.parent && c.parent !== currentFolder)).map(c => [c.id, { x: c.x, y: c.y }]));
+  g.anchor = byId(map.get(g.anchor.id)) || g.anchor;
+  g.unselectOnClick = false;
+  computeHidden();
+}
 function moveSet() {
   const ids = new Set(sel);
   for (const g of doc.nodes) {
@@ -2430,9 +2458,13 @@ canvas.addEventListener('pointerdown', e => {
     case 'node': case 'open': case 'toggle': case 'param': {
       const n = h.node;
       selWire = null;
+      // Ctrl + arrastar = arrasta uma cópia (Ctrl + clique sem arrastar continua tirando/pondo na seleção)
+      g.copy = (e.ctrlKey || e.metaKey) && canEdit();
       if (g.add) {
-        if (sel.has(n.id)) { sel.delete(n.id); g.mode = 'none'; break; }
-        sel.add(n.id);
+        if (sel.has(n.id)) {
+          if (!g.copy) { sel.delete(n.id); g.mode = 'none'; break; }
+          g.unselectOnClick = true;
+        } else sel.add(n.id);
       } else if (!sel.has(n.id)) sel = new Set([n.id]);
       g.mode = 'move';
       g.starts = moveSet();
@@ -2473,6 +2505,7 @@ canvas.addEventListener('pointermove', e => {
     g.moved = true;
     clearTimeout(longTimer);
     if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') checkpoint();
+    if (g.mode === 'move' && g.copy) dragCopy(g);
   }
   const w = toWorld(p.x, p.y);
   switch (g.mode) {
@@ -2567,6 +2600,7 @@ function endPointer(e, cancelled) {
   } else if (g.button === 0) {
     if (g.mode === 'pan') { sel.clear(); selWire = null; }
     if (g.mode === 'move' && !g.add) sel = new Set([g.hit.node.id]);
+    if (g.mode === 'move' && g.unselectOnClick) sel.delete(g.hit.node.id);
     if (g.hit.kind === 'compass') { lastTap.t = 0; compassClick(p); return; }
     if (g.hit.kind === 'align') { lastTap.t = 0; doAlign(g.hit.act); return; }
     if (g.hit.kind === 'zui') { lastTap.t = 0; (g.hit.minus ? removePort : addPort)(g.hit.node, g.hit.side, g.hit.at); return; }
@@ -3164,6 +3198,7 @@ function showHelp() {
     ['Entrar / Compartilhar', 'sincronizar entre aparelhos, convidar por link e editar junto'],
     ['💬 Comentar', 'botão direito num objeto; use @ para mencionar alguém'],
     ['3 cliques numa ideia', 'entra nela como pasta (Esc ou ← Sair volta)'],
+    ['Ctrl + arrastar', 'arrasta uma cópia do que está selecionado'],
     ['Ctrl+Z / Ctrl+Y', 'desfazer / refazer'], ['Ctrl+G', 'agrupar'], ['F', 'ajustar à tela'],
   ].map(([k, v]) => `<li><b>${k}</b>: ${v}</li>`).join('') + '</ul>';
   openOverlay('#modal');
