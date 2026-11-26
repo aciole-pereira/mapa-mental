@@ -178,7 +178,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v36';
+const APP_VERSION = 'v37';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -221,6 +221,7 @@ const single = () => { const s = selectedNodes(); return s.length === 1 ? s[0] :
 
 function makeNode(type, x, y, text = '', extra = {}) {
   const n = { id: uid(), type, x, y, w: 0, h: 0, text };
+  if (currentFolder) n.parent = currentFolder;
   if (type === 'idea') n.state = 'normal';
   if (DEFAULT_PORTS[type]) { n.inputs = [...DEFAULT_PORTS[type][0]]; n.outputs = [...DEFAULT_PORTS[type][1]]; }
   if (type === 'panel') { n.w = 200; n.h = 110; n.color = PANEL_COLORS[0]; }
@@ -259,6 +260,7 @@ function normalize(d) {
         if (n.hidden) o.hidden = true;
       }
       if (n.locked) o.locked = true;
+      if (n.parent) o.parent = String(n.parent).slice(0, 64);
       if ((n.votes | 0) > 0) o.votes = n.votes | 0;
       if (o.type === 'idea' && n.icon) o.icon = String(n.icon).slice(0, 8);
       if (o.type === 'shape') { o.shape = SHAPES[n.shape] ? n.shape : 'rect'; o.color = isHex(n.color) ? n.color : SHAPE_COLORS[1]; o.w = Math.max(40, o.w || 160); o.h = Math.max(30, o.h || 90); }
@@ -497,6 +499,7 @@ function openMap(id) {
   if (editing) commitEdit();
   doc = normalize(d);
   doc.cloud = !!d.cloud; doc.role = d.role || null; doc.dirty = d.dirty || null;
+  currentFolder = null; folderViews = {}; updateCrumbs();
   idMap = null;
   past = []; future = [];
   sel.clear(); selWire = null;
@@ -938,7 +941,7 @@ function drawGrips(g, n, edge) {
 
 // cores do corpo conforme estado e seleção
 function palette(n, isSel) {
-  const S = STATES[n.state] || STATES.normal;
+  const S = STATES[n.locked ? 'disabled' : n.state] || STATES.normal;
   return { S, C: isSel ? { ...S, ...SEL } : S, K: isSel && (n.state || 'normal') === 'normal' ? SEL_CENTER : S };
 }
 // corpo cinza com borda preta, sombra e brilho (comum a todos os "componentes")
@@ -1245,15 +1248,18 @@ function drawScene(g, o) {
     const a = byId(w.from), b = byId(w.to);
     if (!a || !b || !vis(a) || !vis(b)) continue;
     const hl = wireSel === w.id || selection.has(a.id) || selection.has(b.id);
-    drawWire(g, wirePts(a, b, w), hl, a.state === 'disabled' || b.state === 'disabled', scale, w);
+    drawWire(g, wirePts(a, b, w), hl, a.state === 'disabled' || b.state === 'disabled' || a.locked || b.locked, scale, w);
   }
   for (const n of doc.nodes) {
     if (n.type === 'group' || !vis(n)) continue;
-    if (hasGrips(n)) drawGrips(g, n, n.state === 'disabled' ? '#8C8C8C' : '#111111');
+    if (hasGrips(n)) drawGrips(g, n, n.state === 'disabled' || n.locked ? '#8C8C8C' : '#111111');
+    const fade = n.locked && !['idea', 'comp', 'link'].includes(n.type);
+    if (fade) { g.save(); g.globalAlpha = 0.45; }
     DRAW[n.type](g, n, selection.has(n.id), scale, n.id === editId);
-    if (n.locked && scale > 0.3) drawLock(g, n);
+    if (fade) g.restore();
     if (n.votes) drawVotes(g, n);
   }
+  if (o.zui) { const fc = folderCounts(); if (fc.size) for (const n of doc.nodes) if (n.type === 'idea' && !isHidden(n) && n.id !== currentFolder && fc.get(n.id)) drawFolderBadge(g, n, fc.get(n.id)); }
   if (o.zui && cloud.comments.length) for (const n of doc.nodes) if (n.type !== 'group' && !isHidden(n)) drawCommentBadge(g, n);
   if (o.zui) for (const n of doc.nodes) if (zuiVisible(n)) drawZui(g, n);
   if (o.zui) drawAlign(g);
@@ -1614,11 +1620,14 @@ function deleteSelection() {
   if (!sel.size) return;
   const del = new Set([...sel].filter(id => { const n = byId(id); return n && !n.locked; }));
   if (!del.size) return toast('Objetos travados não podem ser excluídos');
+  const before = del.size;
+  withFolderContents(del);
   checkpoint();
   doc.nodes = doc.nodes.filter(n => !del.has(n.id));
   doc.wires = doc.wires.filter(w => !del.has(w.from) && !del.has(w.to));
   sel.clear();
   changed();
+  if (del.size > before) toast(`Pasta apagada com ${del.size - before} ${del.size - before > 1 ? 'itens' : 'item'} dentro — Ctrl+Z desfaz`);
 }
 function disconnect() {
   if (!sel.size) return toast('Selecione objetos');
@@ -1703,7 +1712,9 @@ function paste(data = clip, at = null) {
   checkpoint();
   const map = new Map();
   const nodes = normalize({ nodes: data.nodes, wires: [] }).nodes.map(n => { const c = { ...n, id: uid() }; map.set(n.id, c.id); return c; });
-  const bb = bbox(nodes);
+  for (const n of nodes) { const pid = n.parent && map.get(n.parent); if (pid) n.parent = pid; else if (currentFolder) n.parent = currentFolder; else delete n.parent; }
+  const top = nodes.filter(n => !n.parent || n.parent === currentFolder);
+  const bb = bbox(top.length ? top : nodes);
   const target = at || (lastMouse && lastMouse.inside ? lastMouse.w : viewCenter());
   const dx = target.x - (bb.x + bb.w / 2), dy = target.y - (bb.y + bb.h / 2);
   nodes.forEach(n => { n.x += dx; n.y += dy; if (n.members) n.members = n.members.map(id => map.get(id)).filter(Boolean); });
@@ -1711,13 +1722,14 @@ function paste(data = clip, at = null) {
   doc.nodes.unshift(...groups);
   doc.nodes.push(...rest);
   for (const w of data.wires || []) if (map.has(w.from) && map.has(w.to)) doc.wires.push({ ...wireStyleOf(w), id: uid(), from: map.get(w.from), to: map.get(w.to), fp: w.fp | 0, tp: w.tp | 0 });
-  sel = new Set(nodes.map(n => n.id)); selWire = null;
+  sel = new Set(top.map(n => n.id)); selWire = null;
   changed();
 }
 // ao copiar um grupo, leva junto os membros
 function withMembers(ns) {
   const ids = new Set(ns.map(n => n.id));
   for (const n of ns) if (n.type === 'group') groupMembersDeep(n, ids);
+  withFolderContents(ids);
   return doc.nodes.filter(n => ids.has(n.id));
 }
 function duplicate() {
@@ -1735,11 +1747,11 @@ function snapNode(n) {
 
 // organização automática em árvore (raízes à esquerda, filhos à direita)
 function layoutTrees() {
-  const ns = doc.nodes.filter(hasGrips);
+  const ns = doc.nodes.filter(n => hasGrips(n) && !isHidden(n));
   const out = new Map(), indeg = new Map();
   for (const w of doc.wires) {
     const a = byIdLocal(w.from), b = byIdLocal(w.to);
-    if (!a || !b || !hasGrips(a) || !hasGrips(b)) continue;
+    if (!a || !b || !hasGrips(a) || !hasGrips(b) || isHidden(a) || isHidden(b)) continue;
     if (!out.has(a.id)) out.set(a.id, []);
     out.get(a.id).push(b);
     indeg.set(b.id, (indeg.get(b.id) || 0) + 1);
@@ -1984,7 +1996,7 @@ function updateTrash(p, g) {
 }
 function hideTrash() { const t = trashEl(); if (t) { t.hidden = true; t.classList.remove('hot'); } }
 function dropInTrash(g) {
-  const ids = new Set(g.starts.keys());
+  const ids = withFolderContents(new Set(g.starts.keys()));
   // volta tudo para o lugar original: o Ctrl+Z restaura o estado de antes do arraste
   for (const [id, st] of g.starts) { const n = byId(id); if (n) { n.x = st.x; n.y = st.y; } }
   doc.nodes = doc.nodes.filter(n => !ids.has(n.id));
@@ -2196,6 +2208,8 @@ function endPointer(e, cancelled) {
     if (g.hit.kind === 'open') { lastTap.t = 0; openLink(g.hit.node); updateStatus(); return render(); }
     if (g.hit.kind === 'toggle') { lastTap.t = 0; toggleItem(g.hit.node, g.hit.idx); return; }
     const now = performance.now();
+    // 3º clique quando a edição não abriu (ideia travada ou só leitura)
+    if (lastDouble && now - lastDouble.t < 550 && g.hit.node && g.hit.node.id === lastDouble.id && g.hit.node.type === 'idea') { lastDouble = null; lastTap.t = 0; enterFolder(g.hit.node); return; }
     if (now - lastTap.t < 380 && dist(p.x, p.y, lastTap.x, lastTap.y) < (g.touch ? 28 : 8)) {
       lastTap.t = 0;
       onDoubleTap(p, w, g.hit);
@@ -2278,7 +2292,7 @@ function finishWire(g, w) {
 }
 
 function onDoubleTap(p, w, hit) {
-  if (hit.kind === 'node') return startEdit(hit.node);
+  if (hit.kind === 'node') { lastDouble = { t: performance.now(), id: hit.node.id }; return startEdit(hit.node); }
   if (hit.kind === 'param') return startEdit(hit.node, false, { side: hit.side, idx: hit.idx });
   if (hit.kind === 'wire') return editWireLabel(hit.wire);
   if (hit.kind === 'none') return openSearch(p, w);
@@ -2442,6 +2456,7 @@ function openContextMenu(sx, sy, hit, w) {
       n.type === 'check' && n.items.some(i => i.done) && { label: 'Desmarcar todos', action: () => { checkpoint(); n.items.forEach(i => (i.done = false)); changed(); } },
       hasGrips(n) && portCount(n, 'out') > 0 && { label: 'Adicionar ideia filha', key: 'Tab', action: () => addChild(n) },
       n.type === 'idea' && { label: 'Adicionar ideia irmã', key: 'Enter', action: () => addSibling(n) },
+      n.type === 'idea' && { label: '📂 Abrir como pasta', key: '3 cliques', action: () => enterFolder(n) },
       n.type === 'idea' && { label: '✨ Expandir com IA', action: () => aiExpand(n) },
       CLOUD_ON && n.type !== 'group' && { label: '💬 Comentar…', action: () => openComments(n.id) },
       '-',
@@ -2489,6 +2504,7 @@ function openContextMenu(sx, sy, hit, w) {
       { label: 'Nova imagem aqui…', action: () => createSpecial('image', w) },
       { label: 'Colar aqui', key: 'Ctrl+V', disabled: !clip, action: () => paste(clip, w) },
       '-',
+      currentFolder && { label: '← Sair da pasta', key: 'Esc', action: folderUp },
       { label: 'Selecionar tudo', key: 'Ctrl+A', action: selectAll },
       { label: 'Organizar mapa', action: arrange },
       { label: 'Ajustar à tela', key: 'F', action: () => fitView() },
@@ -2531,6 +2547,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'Tab') { if (n) e.shiftKey ? addSibling(n) : addChild(n); }
   else if (k === 'Enter') { if (n) n.type === 'idea' ? addSibling(n) : startEdit(n); }
   else if (k === 'F2') { if (n) startEdit(n); }
+  else if (k === 'Escape' && currentFolder && !sel.size && !selWire && tool !== 'pen' && !voteMode) folderUp();
   else if (k === 'Escape') { if (tool === 'pen') togglePen(false); if (voteMode) toggleVote(false); sel.clear(); selWire = null; hideMenus(); render(); updateStatus(); }
   else if (e.altKey) handled = false;
   else if (kl === 'n') createAt('panel');
@@ -2722,6 +2739,7 @@ function showHelp() {
     ['Menu IA', 'gerar, expandir, resumir e agrupar com a sua chave de API'],
     ['Entrar / Compartilhar', 'sincronizar entre aparelhos, convidar por link e editar junto'],
     ['💬 Comentar', 'botão direito num objeto; use @ para mencionar alguém'],
+    ['3 cliques numa ideia', 'entra nela como pasta (Esc ou ← Sair volta)'],
     ['Ctrl+Z / Ctrl+Y', 'desfazer / refazer'], ['Ctrl+G', 'agrupar'], ['F', 'ajustar à tela'],
   ].map(([k, v]) => `<li><b>${k}</b>: ${v}</li>`).join('') + '</ul>';
   openOverlay('#modal');
@@ -2927,8 +2945,11 @@ const ICONS_EMO = ['💡', '⭐', '❗', '❓', '✅', '⚠️', '🔥', '📌',
 const pointerOrCenter = () => (lastMouse && lastMouse.inside ? lastMouse.w : viewCenter());
 const isHidden = n => hiddenSet.has(n.id);
 function computeHidden() {
+  idMap = null;
   hiddenSet = new Set();
   for (const g of doc.nodes) if (g.type === 'group' && g.hidden) { hiddenSet.add(g.id); groupMembersDeep(g, hiddenSet); }
+  const vis = folderVisibleSet();
+  for (const n of doc.nodes) if (!vis.has(n.id)) hiddenSet.add(n.id);
 }
 function ideaText(n) { return n.icon ? n.icon + ' ' + (n.text || '') : (n.text || ' '); }
 function wireStyleOf(w) {
@@ -4583,6 +4604,7 @@ function applyRemoteOps(mapId, ops) {
         members: Array.isArray(g.members) ? g.members.map(String) : [] };
       if (g.hidden) o.hidden = true;
       if (g.locked) o.locked = true;
+      if (g.parent) o.parent = String(g.parent).slice(0, 64);
       return o;
     });
     const clean = [...groups, ...normalize({ nodes: incoming.filter(n => n.type !== 'group'), wires: [] }).nodes];
@@ -4627,7 +4649,7 @@ function trackPresence(cursor) {
   const now = Date.now();
   if (now - presT < 70) return;
   presT = now;
-  cloud.channel.track({ id: me.id, name: me.name, color: peerColor(me.id), x: presCursor ? presCursor.x : null, y: presCursor ? presCursor.y : null, sel: [...sel].slice(0, 50), t: now }).catch(() => {});
+  cloud.channel.track({ id: me.id, name: me.name, color: peerColor(me.id), x: presCursor ? presCursor.x : null, y: presCursor ? presCursor.y : null, sel: [...sel].slice(0, 50), folder: currentFolder, t: now }).catch(() => {});
 }
 function renderPeersUi() {
   const box = $('#peers');
@@ -4645,6 +4667,7 @@ function drawPeers(g) {
   if (!cloud.peers.size) return;
   const z = view.z;
   for (const [id, p] of cloud.peers) {
+    if ((p.folder || null) !== (currentFolder || null)) continue;
     const col = p.color || peerColor(id);
     for (const sid of p.sel || []) {
       const n = byId(sid);
@@ -4929,6 +4952,131 @@ function buildCloud() {
   });
   $('#cmSend').addEventListener('click', sendComment);
 }
+
+// ================================================================ PASTAS
+// Cada ideia pode funcionar como pasta: 3 cliques (ou menu) entram nela.
+// Lá dentro aparecem só o CAMINHO até ela (ideias ligadas antes dela, no mesmo
+// nível) e o CONTEÚDO dela (objetos com n.parent = id da ideia). O que é criado
+// lá dentro ganha n.parent automaticamente. Pastas podem ter pastas dentro.
+let currentFolder = null;          // id da ideia-pasta aberta (null = mapa principal)
+let folderViews = {};              // vista (zoom/posição) guardada por nível
+let lastDouble = null;             // { t, id } do último duplo clique numa ideia
+
+const folderOf = n => (n && n.parent && byId(n.parent) ? n.parent : null);
+function folderVisibleSet() {
+  if (currentFolder && !byId(currentFolder)) { currentFolder = null; updateCrumbs(); }
+  const vis = new Set();
+  if (!currentFolder) {
+    for (const n of doc.nodes) if (!folderOf(n)) vis.add(n.id);
+    return vis;
+  }
+  const f = byId(currentFolder);
+  vis.add(f.id);
+  for (const n of doc.nodes) if (n.parent === f.id) vis.add(n.id);
+  // caminho: tudo o que leva até a pasta por fios, no mesmo nível dela
+  const lvl = folderOf(f);
+  const stack = [f.id];
+  while (stack.length) {
+    const id = stack.pop();
+    for (const w of doc.wires) {
+      if (w.to !== id) continue;
+      const a = byId(w.from);
+      if (a && folderOf(a) === lvl && !vis.has(a.id)) { vis.add(a.id); stack.push(a.id); }
+    }
+  }
+  return vis;
+}
+// conteúdo de uma pasta, incluindo pastas dentro de pastas
+function folderContentsDeep(id, acc = new Set()) {
+  for (const n of doc.nodes) if (n.parent === id && !acc.has(n.id)) { acc.add(n.id); folderContentsDeep(n.id, acc); }
+  return acc;
+}
+function withFolderContents(ids) {
+  for (const id of [...ids]) folderContentsDeep(id, ids);
+  return ids;
+}
+function folderCounts() {
+  const m = new Map();
+  for (const n of doc.nodes) if (n.parent) m.set(n.parent, (m.get(n.parent) || 0) + 1);
+  return m;
+}
+function drawFolderBadge(g, n, k) {
+  const x = n.x + 3, y = n.y + n.h - 3;
+  g.save();
+  g.beginPath();
+  g.moveTo(x - 9, y - 6); g.lineTo(x - 3, y - 6); g.lineTo(x - 1, y - 4); g.lineTo(x + 10, y - 4);
+  g.lineTo(x + 10, y + 7); g.lineTo(x - 9, y + 7); g.closePath();
+  g.fillStyle = '#F2C94C'; g.fill();
+  g.lineWidth = 1; g.strokeStyle = '#7A5A10'; g.stroke();
+  g.fillStyle = '#3A2A00'; g.font = `700 9px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(k > 99 ? '99+' : String(k), x + 0.5, y + 2);
+  g.restore();
+}
+
+function saveFolderView() { folderViews[currentFolder || ''] = { ...view }; }
+function goToFolder(id, focus) {
+  if (editing) commitEdit();
+  hideMenus();
+  saveFolderView();
+  currentFolder = id || null;
+  sel = new Set(focus ? [focus] : []); selWire = null;
+  computeHidden();
+  updateCrumbs();
+  const saved = folderViews[currentFolder || ''];
+  if (saved) animateView(saved);
+  else {
+    const vis = doc.nodes.filter(n => !isHidden(n));
+    if (vis.length) fitView(true, vis);
+  }
+  updateStatus();
+  render();
+  if (cloud.channel) trackPresence();
+}
+function enterFolder(n) {
+  if (!n || n.type !== 'idea') return toast('Só ideias funcionam como pasta');
+  goToFolder(n.id);
+  if (!doc.nodes.some(m => m.parent === n.id)) toast(`Pasta “${(n.text || 'ideia').split('\n')[0].slice(0, 30)}” vazia — o que você criar aqui fica dentro dela`);
+}
+function folderUp() {
+  if (!currentFolder) return;
+  const f = byId(currentFolder);
+  goToFolder(folderOf(f), f && f.id);
+}
+// trilha no topo: 🏠 Mapa › Pasta › Subpasta   [← Sair]
+function updateCrumbs() {
+  const bar = $('#crumbs');
+  if (!bar) return;
+  document.body.classList.toggle('infolder', !!currentFolder);
+  bar.hidden = !currentFolder;
+  if (!currentFolder) return;
+  const chain = [];
+  for (let f = byId(currentFolder), guard = 0; f && guard < 50; f = byId(folderOf(f)), guard++) chain.unshift(f);
+  bar.innerHTML = '';
+  const home = el('button', 'crumb', '🏠 ' + (doc.name || 'Mapa'));
+  home.addEventListener('click', () => goToFolder(null, chain[0] && chain[0].id));
+  bar.append(home);
+  chain.forEach((f, i) => {
+    bar.append(el('span', 'sep', '›'));
+    const b = el('button', 'crumb' + (i === chain.length - 1 ? ' here' : ''), '📂 ' + ((f.text || 'ideia').split('\n')[0].slice(0, 24)));
+    if (i < chain.length - 1) b.addEventListener('click', () => goToFolder(f.id, chain[i + 1].id));
+    bar.append(b);
+  });
+  const out = el('button', 'crumb out', '← Sair');
+  out.title = 'Sair da pasta (Esc)';
+  out.addEventListener('click', folderUp);
+  bar.append(out);
+}
+// 3º clique: o 2º clique abriu a edição do texto; o 3º cai na caixa de edição
+editor.addEventListener('pointerdown', e => {
+  if (!editing || !lastDouble) return;
+  if (performance.now() - lastDouble.t < 550 && editing.node.id === lastDouble.id && editing.node.type === 'idea') {
+    e.preventDefault();
+    const n = editing.node;
+    lastDouble = null;
+    cancelEdit();
+    enterFolder(n);
+  }
+});
 
 // ---------------------------------------------------------------- início
 buildRibbon();

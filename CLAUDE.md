@@ -30,6 +30,12 @@ GitHub) pelo navegador, pedindo autorização antes de mudanças em contas.
 - `checkpoint()` antes de toda mutação (é também o bloqueio de "somente leitura");
   `changed()` depois (sincroniza com a nuvem e salva).
 - Textos da interface em português.
+- **Pastas:** uma ideia vira pasta com 3 cliques. Objetos dentro têm `n.parent = id`
+  da ideia; `makeNode` preenche isso com a pasta aberta (`currentFolder`). A
+  visibilidade (caminho até a pasta + conteúdo) entra em `computeHidden()`, então
+  tudo que já respeita `isHidden()` funciona por nível. Apagar/copiar uma pasta leva
+  o conteúdo junto (`withFolderContents`).
+- **Travado** (`n.locked`) tem a aparência do "Disable" do Grasshopper.
 
 ## Testes no navegador (importante)
 Testar sempre numa **aba nova**, com um **mapa de teste** criado via JS e aberto

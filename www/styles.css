@@ -620,3 +620,14 @@ h4.sh { margin: 12px 0 4px; font-size: 13px; }
 .trash svg { width: 30px; height: 30px; }
 .trash.hot { background: #C92A2A; border-color: #7A0000; color: #fff; transform: scale(1.22); }
 body.presenting .trash { display: none; }
+
+/* ---------- pastas: trilha no topo ---------- */
+.crumbs { top: 8px; left: 8px; max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none; }
+.crumbs::-webkit-scrollbar { display: none; }
+.crumbs .crumb { white-space: nowrap; }
+.crumbs .crumb.here { font-weight: 700; cursor: default; }
+.crumbs .crumb.here:hover { background: none; border-color: transparent; }
+.crumbs .crumb.out { margin-left: 6px; border-color: #9A9A9A; background: linear-gradient(#FFFFFF, #E6E6E6); }
+.crumbs .sep { color: #888; }
+body.infolder #timer { top: 52px; }
+body.presenting .crumbs { display: none; }
