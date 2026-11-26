@@ -178,7 +178,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -987,13 +987,12 @@ function drawComp(g, n, isSel, scale, hideText) {
   const { S, C, K } = palette(n, isSel);
   drawBody(g, n, C, isSel, scale);
   const { lw, rw } = compGeom(n);
-  drawStrip(g, n.x + lw, n.y + 4, 26, n.h - 8, K);
   if (!hideText && scale > 0.22) {
     g.save();
     g.translate(n.x + lw + 13, n.y + n.h / 2);
     g.rotate(-Math.PI / 2);
     g.font = F.comp;
-    g.fillStyle = S.cText;
+    g.fillStyle = C.io;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillText(n.text || '', 0, 0.5, n.h - 14);
@@ -1007,14 +1006,13 @@ function drawLink(g, n, isSel, scale, hideText) {
   drawBody(g, n, C, isSel, scale);
   const { lw, rw } = compGeom(n);
   const px = n.x + lw, py = n.y + 4, pw = n.w - lw - rw, ph = n.h - 8;
-  drawStrip(g, px, py, pw, ph, n.state === 'normal' ? LINK_C : S);
   // área de abrir (↗)
   const ox = px + pw - LINK_OPEN;
-  g.strokeStyle = 'rgba(255,255,255,0.25)';
+  g.strokeStyle = 'rgba(0,0,0,0.22)';
   g.lineWidth = 1;
   g.beginPath(); g.moveTo(ox + .5, py + 4); g.lineTo(ox + .5, py + ph - 4); g.stroke();
   const cx = ox + LINK_OPEN / 2, cy = n.y + n.h / 2;
-  g.strokeStyle = n.url ? '#FFFFFF' : 'rgba(255,255,255,0.35)';
+  g.strokeStyle = n.url ? C.io : 'rgba(0,0,0,0.3)';
   g.lineWidth = 1.6;
   g.beginPath();
   g.moveTo(cx - 4, cy + 4); g.lineTo(cx + 4, cy - 4);
@@ -1023,7 +1021,7 @@ function drawLink(g, n, isSel, scale, hideText) {
   if (!hideText && scale > 0.22) {
     const L = wrap(linkLabel(n), F.link, IDEA_MAX);
     g.font = F.link;
-    g.fillStyle = n.state === 'normal' ? LINK_C.cText : S.cText;
+    g.fillStyle = n.state === 'normal' && !isSel ? '#0B4F9E' : C.io;
     g.strokeStyle = g.fillStyle;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
@@ -1143,11 +1141,10 @@ function drawIdea(g, n, isSel, scale, hideText) {
   const { S, C, K } = palette(n, isSel);
   drawBody(g, n, C, isSel, scale);
   const { lw, rw } = compGeom(n);
-  drawStrip(g, n.x + lw, n.y + 4, n.w - lw - rw, n.h - 8, K);
   if (!hideText && scale > 0.22) {
     const L = wrap(ideaText(n), F.idea, IDEA_MAX);
     g.font = F.idea;
-    g.fillStyle = S.cText;
+    g.fillStyle = C.io;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     const y0 = n.y + n.h / 2 - (L.length - 1) * LH.idea / 2 + 0.5;
@@ -1831,7 +1828,7 @@ function positionEditor() {
     const lines = wrap(n.text || ' ', F.idea, IDEA_MAX).length;
     pt = Math.max(0, (h - lines * LH.idea) / 2);
     const S = STATES[n.state] || STATES.normal;
-    bg = S.cBot; color = S.cText;
+    bg = '#FFFFFF'; color = '#111111';
   } else if (type === 'panel') { x += 8; y += 8; w -= 16; h -= 16; bg = n.color; }
   else if (type === 'scribble') { x += 4; y += 4; w += 60; bg = 'rgba(255,255,255,0.75)'; }
   else if (type === 'group') { const geo = groupGeo.get(n.id); const tp = geo ? geo.top : { x: n.x + n.w / 2, y: n.y }; w = 140; h = 18; x = tp.x - w / 2; y = tp.y - h - 6; align = 'center'; pt = 1; }
@@ -1845,10 +1842,10 @@ function positionEditor() {
     x += lw; y += 4; w -= lw + rw + LINK_OPEN; h -= 8; align = 'center';
     const lines = wrap(linkLabel(n), F.link, IDEA_MAX).length;
     pt = Math.max(0, (h - lines * LH.link) / 2);
-    bg = LINK_C.cBot; color = LINK_C.cText;
+    bg = '#FFFFFF'; color = '#0B4F9E';
   } else if (type === 'comp') {
     w = Math.max(150, n.w); x = n.x + n.w / 2 - w / 2; h = LH.comp + 6; y = n.y + n.h / 2 - h / 2;
-    align = 'center'; bg = STATES.normal.cBot; color = '#fff'; pt = 3;
+    align = 'center'; bg = '#FFFFFF'; color = '#111111'; pt = 3;
   } else if (type === 'image') { w = Math.max(160, n.w); x = n.x + n.w / 2 - w / 2; y = n.y + n.h + 3; h = CAPTION; align = 'center'; pt = 2; }
   else if (type === 'check') { x += 6; y += 4; w -= 12; h = Math.max(h - 8, CHECK_HEAD + 2 * ROW); pt = 2; }
   const s = editor.style;
