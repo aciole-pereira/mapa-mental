@@ -517,6 +517,9 @@ button { font: inherit; color: inherit; }
   user-select: text;
 }
 #penbar, #votebar { top: 8px; left: 50%; transform: translateX(-50%); }
+#anchorbar { top: 8px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 16px); flex-wrap: wrap; justify-content: center; }
+body.infolder #anchorbar { top: 52px; }
+body.presenting #anchorbar { display: none; }
 #penbar .pc { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; outline: 1px solid #888; padding: 0; }
 #penbar .pc.on { outline: 2px solid var(--green-dark); }
 #penbar .pw { width: 26px; height: 24px; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -545,7 +548,7 @@ body.presenting #findbar, body.presenting #penbar, body.presenting #votebar { di
 .row-end { display: flex; justify-content: flex-end; margin-top: 10px; }
 .ta { width: 100%; font: 13px var(--font); padding: 6px; -webkit-user-select: text; user-select: text; }
 ol.votes { padding-left: 20px; margin: 0; }
-@media (max-width: 600px) { .tplgrid { grid-template-columns: 1fr; } #penbar .lbl, #votebar .lbl { display: none; } }
+@media (max-width: 600px) { .tplgrid { grid-template-columns: 1fr; } #penbar .lbl, #votebar .lbl, #anchorbar .lbl { display: none; } }
 
 .sheet .body { overflow: auto; min-height: 0; }
 #ctxmenu { max-height: calc(100% - 8px); overflow-y: auto; }

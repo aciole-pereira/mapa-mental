@@ -110,16 +110,268 @@ function textWidth(lines, font) {
   for (const l of lines) w = Math.max(w, mctx.measureText(l).width);
   return w;
 }
+// ---------- Formatos das pilhas (ideias): quadrado, círculo, triângulo, losango, estrela
+// Numa ideia com formato, as bolinhas ficam em volta da forma (n.anchors = [[u, v], ...],
+// posições de 0 a 1 dentro do retângulo da pilha). Cada bolinha serve de entrada e de saída.
+const FORMS = { square: 'Quadrado', circle: 'Círculo', triangle: 'Triângulo', diamond: 'Losango', star: 'Estrela' };
+const FORM_ICON = { '': '▭', square: '■', circle: '●', triangle: '▲', diamond: '◆', star: '★' };
+const FORM_K = {
+  square: { tw: 0.8, th: 0.8, base: 90, ty: 0.5 },
+  circle: { tw: 0.68, th: 0.68, base: 96, ty: 0.5 },
+  triangle: { tw: 0.46, th: 0.34, base: 124, ty: 0.66 },
+  diamond: { tw: 0.5, th: 0.48, base: 112, ty: 0.5 },
+  star: { tw: 0.36, th: 0.3, base: 140, ty: 0.56 },
+};
+const STAR_IN = 0.45, STAR_H = (1 + Math.cos(Math.PI / 5)) / 2;   // raio interno; altura/largura da estrela
+const isFormed = n => !!n && n.type === 'idea' && !!FORMS[n.form];
+const r3 = v => Math.round(v * 1000) / 1000;
+const circleAt = deg => [r3(0.5 + 0.5 * Math.cos(deg * Math.PI / 180)), r3(0.5 + 0.5 * Math.sin(deg * Math.PI / 180))];
+function formVerts(form) {
+  if (form === 'square') return [[0, 0], [1, 0], [1, 1], [0, 1]];
+  if (form === 'diamond') return [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
+  if (form === 'triangle') return [[0.5, 0], [1, 1], [0, 1]];
+  if (form === 'star') {
+    const v = [];
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? STAR_IN : 1;
+      v.push([r3(0.5 + 0.5 * r * Math.cos(a)), r3((1 + r * Math.sin(a)) / (2 * STAR_H))]);
+    }
+    return v;
+  }
+  return null;
+}
+function defaultAnchors(form) {
+  if (form === 'circle') return [180, 270, 0, 90].map(circleAt);          // um em cada quadrante
+  if (form === 'square') return [[0, 0.5], [0.5, 0], [1, 0.5], [0.5, 1]];  // um em cada lado
+  if (form === 'star') return formVerts('star').filter((_, i) => !(i % 2)); // uma em cada ponta
+  return formVerts(form);                                                   // triângulo e losango: nas pontas
+}
+// bolinhas extras oferecidas para cada formato
+function anchorExtras(form) {
+  if (form === 'circle') return [
+    { label: '+ A cada 45º', pts: () => [0, 45, 90, 135, 180, 225, 270, 315].map(circleAt) },
+    { label: '+ A cada 30º', pts: () => Array.from({ length: 12 }, (_, i) => circleAt(i * 30)) },
+  ];
+  if (['triangle', 'diamond', 'star'].includes(form)) return [{
+    label: '+ Meio das arestas',
+    pts: () => { const V = formVerts(form); return V.map((a, i) => { const b = V[(i + 1) % V.length]; return [r3((a[0] + b[0]) / 2), r3((a[1] + b[1]) / 2)]; }); },
+  }];
+  return [];
+}
+function formCenter(n) {
+  return { x: n.x + n.w / 2, y: n.form === 'star' ? n.y + n.w / 2 : n.form === 'triangle' ? n.y + n.h * 2 / 3 : n.y + n.h / 2 };
+}
+// bolinhas em coordenadas do mapa, com a direção "para fora" (o fio sai nessa direção)
+function anchorPts(n) {
+  const A = n.anchors && n.anchors.length ? n.anchors : defaultAnchors(n.form);
+  const c = formCenter(n);
+  return A.map(([u, v]) => {
+    const x = n.x + u * n.w, y = n.y + v * n.h;
+    const dx = x - c.x, dy = y - c.y, l = Math.hypot(dx, dy) || 1;
+    return { x, y, dx: dx / l, dy: dy / l };
+  });
+}
+// ponto do contorno da forma mais próximo de (wx, wy), em [u, v]
+function projectOutline(n, wx, wy) {
+  if (n.form === 'circle') {
+    const a = Math.atan2((wy - n.y - n.h / 2) / (n.h / 2), (wx - n.x - n.w / 2) / (n.w / 2));
+    return [r3(0.5 + 0.5 * Math.cos(a)), r3(0.5 + 0.5 * Math.sin(a))];
+  }
+  const V = formVerts(n.form).map(([u, v]) => ({ x: n.x + u * n.w, y: n.y + v * n.h }));
+  let best = null, bd = Infinity;
+  V.forEach((a, i) => {
+    const b = V[(i + 1) % V.length], dx = b.x - a.x, dy = b.y - a.y, l = dx * dx + dy * dy;
+    const t = l ? clamp(((wx - a.x) * dx + (wy - a.y) * dy) / l, 0, 1) : 0;
+    const px = a.x + t * dx, py = a.y + t * dy, d = dist(wx, wy, px, py);
+    if (d < bd) { bd = d; best = [r3((px - n.x) / n.w), r3((py - n.y) / n.h)]; }
+  });
+  return best;
+}
+function formTextMax(n) {
+  const k = FORM_K[n.form];
+  return Math.max(30, (n.fw || k.base * 1.5) * k.tw - 10);
+}
+function measureForm(n) {
+  const k = FORM_K[n.form];
+  const L = wrap(ideaText(n), F.idea, formTextMax(n));
+  const tw = textWidth(L, F.idea), th = L.length * LH.idea;
+  const S = Math.max(n.fw || k.base, Math.ceil((tw + 12) / k.tw), Math.ceil((th + 10) / k.th));
+  n.w = S;
+  n.h = Math.round(n.form === 'triangle' ? S * 0.87 : n.form === 'star' ? S * STAR_H : S);
+}
+function formPath(g, n) {
+  const { x, y, w, h } = n;
+  if (n.form === 'square') return rr(g, x, y, w, h, 8);
+  g.beginPath();
+  if (n.form === 'circle') { g.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); return; }
+  formVerts(n.form).forEach(([u, v], i) => (i ? g.lineTo(x + u * w, y + v * h) : g.moveTo(x + u * w, y + v * h)));
+  g.closePath();
+}
+function drawFormIdea(g, n, isSel, scale, hideText) {
+  const { C } = palette(n, isSel);
+  g.save();
+  g.lineJoin = 'round';
+  shadow(g, scale);
+  formPath(g, n);
+  const gr = g.createLinearGradient(0, n.y, 0, n.y + n.h);
+  gr.addColorStop(0, C.top); gr.addColorStop(1, C.bot);
+  g.fillStyle = gr;
+  g.fill();
+  noShadow(g);
+  g.lineWidth = isSel ? 1.7 : 1.2;
+  g.strokeStyle = C.edge;
+  g.stroke();
+  g.restore();
+  if (!hideText && scale > 0.22) {
+    const L = wrap(ideaText(n), F.idea, formTextMax(n));
+    g.font = F.idea;
+    g.fillStyle = C.io;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const y0 = n.y + n.h * FORM_K[n.form].ty - (L.length - 1) * LH.idea / 2 + 0.5;
+    L.forEach((l, i) => g.fillText(l, n.x + n.w / 2, y0 + i * LH.idea));
+  }
+}
+// pontas dos fios ligados a n (para religar na bolinha mais próxima depois de mudar a forma)
+function endPoints(n) {
+  return { in: ports(n, 'in').map(p => ({ ...p })), out: ports(n, 'out').map(p => ({ ...p })) };
+}
+function nearestIdx(list, p) {
+  let bi = 0, bd = Infinity;
+  list.forEach((q, i) => { const d = dist(p.x, p.y, q.x, q.y); if (d < bd) { bd = d; bi = i; } });
+  return bi;
+}
+function remapEnds(n, old) {
+  const nin = ports(n, 'in'), nout = ports(n, 'out');
+  for (const w of doc.wires) {
+    if (w.from === n.id && nout.length) { const p = old.out[w.fp | 0] || old.out[0]; w.fp = p ? nearestIdx(nout, p) : 0; }
+    if (w.to === n.id && nin.length) { const p = old.in[w.tp | 0] || old.in[0]; w.tp = p ? nearestIdx(nin, p) : 0; }
+  }
+}
+function reshape(n, fn) {
+  const old = endPoints(n), cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+  fn();
+  measure(n);
+  n.x = Math.round(cx - n.w / 2); n.y = Math.round(cy - n.h / 2);
+  remapEnds(n, old);
+}
+function setForm(form) {
+  const ns = selectedNodes().filter(n => n.type === 'idea' && !n.locked);
+  if (!ns.length) return;
+  checkpoint();
+  for (const n of ns) reshape(n, () => {
+    if (form) { n.form = form; n.anchors = defaultAnchors(form); }
+    else { delete n.form; delete n.anchors; }
+  });
+  changed();
+}
+
+// ---------- Modo de edição das bolinhas de uma pilha
+let anchorEdit = null;   // { id, others: [ids selecionados antes] }
+function startAnchorEdit(n) {
+  if (!isFormed(n)) return;
+  if (!canEdit()) return readOnlyToast();
+  if (n.locked) return toast('Objeto travado — destrave para editar (Ctrl+L)');
+  if (editing) commitEdit();
+  if (!n.anchors || !n.anchors.length) n.anchors = defaultAnchors(n.form);
+  anchorEdit = { id: n.id, others: [...sel].filter(id => id !== n.id) };
+  sel = new Set([n.id]); selWire = null;
+  buildAnchorbar();
+  updateStatus(); render();
+}
+function endAnchorEdit() {
+  if (!anchorEdit) return;
+  anchorEdit = null;
+  $('#anchorbar').hidden = true;
+  hideMenus();
+  render();
+}
+function anchorNode() {
+  const n = anchorEdit && byId(anchorEdit.id);
+  return n && isFormed(n) && !isHidden(n) && !n.locked ? n : null;
+}
+function changeAnchors(n, fn) {
+  checkpoint();
+  const old = endPoints(n);
+  fn(n.anchors);
+  remapEnds(n, old);
+  changed();
+}
+function addAnchors(n, pts) {
+  const novos = pts.filter(p => !n.anchors.some(a => Math.abs(a[0] - p[0]) < 0.02 && Math.abs(a[1] - p[1]) < 0.02));
+  if (!novos.length) return toast('Essas bolinhas já existem');
+  if (n.anchors.length + novos.length > 48) return toast('Máximo de 48 bolinhas');
+  changeAnchors(n, A => A.push(...novos));
+}
+function removeAnchor(n, idx) {
+  if (n.anchors.length <= 1) return toast('A pilha precisa de pelo menos uma bolinha');
+  changeAnchors(n, A => A.splice(idx, 1));
+}
+function applyAnchorsTo(targets) {
+  const src = anchorNode();
+  if (!src || !targets.length) return;
+  checkpoint();
+  for (const t of targets) reshape(t, () => { t.form = src.form; t.anchors = src.anchors.map(a => [...a]); });
+  changed();
+  toast(`Bolinhas aplicadas a ${targets.length} pilha${targets.length > 1 ? 's' : ''}`);
+}
+function buildAnchorbar() {
+  const n = anchorNode(), bar = $('#anchorbar');
+  if (!n) return endAnchorEdit();
+  bar.innerHTML = '';
+  bar.append(el('span', 'lbl', `Bolinhas (${FORMS[n.form]}): arraste para mover · duplo clique na borda acrescenta · duplo clique na bolinha remove`));
+  const btn = (t, fn) => { const b = el('button', null, t); b.addEventListener('click', fn); bar.append(b); return b; };
+  for (const x of anchorExtras(n.form)) btn(x.label, () => { const m = anchorNode(); if (m) addAnchors(m, x.pts()); });
+  btn('Padrão', () => { const m = anchorNode(); if (m) changeAnchors(m, A => A.splice(0, A.length, ...defaultAnchors(m.form))); });
+  const ap = btn('Aplicar a…', () => {
+    const m = anchorNode(); if (!m) return;
+    const selOthers = anchorEdit.others.map(byId).filter(t => t && t.type === 'idea' && !t.locked && t !== m);
+    const same = doc.nodes.filter(t => t !== m && t.type === 'idea' && t.form === m.form && !t.locked);
+    const r = ap.getBoundingClientRect(), s = stage.getBoundingClientRect();
+    showMenu(r.left - s.left, r.bottom - s.top, [
+      { label: `Pilhas que estavam selecionadas (${selOthers.length})`, disabled: !selOthers.length, action: () => applyAnchorsTo(selOthers) },
+      { label: `Todas as pilhas em ${FORMS[m.form].toLowerCase()} (${same.length})`, disabled: !same.length, action: () => applyAnchorsTo(same) },
+    ]);
+  });
+  btn('Concluir', endAnchorEdit);
+  bar.hidden = false;
+}
+function drawAnchorEdit(g) {
+  const n = anchorNode();
+  if (!n) return;
+  const k = 1 / view.z;
+  g.save();
+  formPath(g, n);
+  g.setLineDash([6 * k, 4 * k]);
+  g.lineWidth = 1.5 * k;
+  g.strokeStyle = WIRE_SEL;
+  g.stroke();
+  g.setLineDash([]);
+  anchorPts(n).forEach((p, i) => {
+    const hot = hover && hover.node === n && hover.kind === 'anchor' && hover.idx === i;
+    g.beginPath();
+    g.arc(p.x, p.y, hot ? 8 : 6.5, 0, Math.PI * 2);
+    g.fillStyle = SEL.top;
+    g.fill();
+    g.lineWidth = 2;
+    g.strokeStyle = '#111111';
+    g.stroke();
+  });
+  g.restore();
+}
+
 // Largura fixa (n.fw): ideias, links e componentes podem ter a largura escolhida pela pessoa
 const WIDE = ['idea', 'link', 'comp'];
 function textMax(n, extra) {
+  if (isFormed(n)) return formTextMax(n);
   if (!n.fw) return IDEA_MAX;
   const { lw, rw } = compGeom(n);
   return Math.max(30, n.fw - lw - rw - 24 - (extra || 0));
 }
 function measure(n) {
   const portsH = n.inputs ? Math.max(n.inputs.length, n.outputs.length, 1) * PORT_GAP + 8 : 0;
-  if (n.type === 'idea') {
+  if (isFormed(n)) measureForm(n);
+  else if (n.type === 'idea') {
     const L = wrap(ideaText(n), F.idea, textMax(n));
     const { lw, rw } = compGeom(n);
     n.w = n.fw ? Math.max(lw + rw + 54, n.fw) : Math.max(116, Math.ceil(textWidth(L, F.idea) + lw + rw + 24));
@@ -148,6 +400,7 @@ function measure(n) {
 }
 // zonas laterais do componente (largura das etiquetas de entrada/saída)
 function compGeom(n) {
+  if (isFormed(n)) return { lw: 0, rw: 0 };
   mctx.font = F.io;
   const side = list => Math.max(20, ...list.map(s => mctx.measureText(s).width + 12));
   return { lw: side(n.inputs), rw: side(n.outputs) };
@@ -185,7 +438,7 @@ function nextLabel() { return ''; }
 
 // ---------------------------------------------------------------- estado
 // Número da versão do app (mesmo número de VERSION em sw.js): aparece em Ajuda → Versão
-const APP_VERSION = 'v40';
+const APP_VERSION = 'v41';
 const IDX = 'mm.index', CUR = 'mm.current';
 let doc = null;
 let view = { x: 0, y: 0, z: 1 };
@@ -207,10 +460,12 @@ function byId(id) {
 const hasGrips = n => n.type !== 'scribble' && n.type !== 'group' && n.type !== 'draw';
 function portCount(n, kind) {
   if (!hasGrips(n)) return 0;
+  if (isFormed(n)) return anchorPts(n).length;
   if (n.inputs) return (kind === 'in' ? n.inputs : n.outputs).length;
   return 1;
 }
 function ports(n, kind) {
+  if (isFormed(n)) return anchorPts(n);
   const k = portCount(n, kind), x = kind === 'in' ? n.x : n.x + n.w;
   const out = [];
   for (let i = 0; i < k; i++) out.push({ x, y: n.y + n.h * (i + 0.5) / k });
@@ -219,6 +474,7 @@ function ports(n, kind) {
 const gripIn = (n, i = 0) => ports(n, 'in')[i] || { x: n.x, y: n.y + n.h / 2 };
 const gripOut = (n, i = 0) => ports(n, 'out')[i] || { x: n.x + n.w, y: n.y + n.h / 2 };
 function nearestPort(n, kind, w) {
+  if (isFormed(n) && w.x !== undefined) return nearestIdx(ports(n, kind), w);
   let best = 0, bd = Infinity;
   ports(n, kind).forEach((p, i) => { const d = Math.abs(p.y - w.y); if (d < bd) { bd = d; best = i; } });
   return best;
@@ -271,6 +527,11 @@ function normalize(d) {
       if (n.parent) o.parent = String(n.parent).slice(0, 64);
       if ((n.votes | 0) > 0) o.votes = n.votes | 0;
       if (o.type === 'idea' && n.icon) o.icon = String(n.icon).slice(0, 8);
+      if (o.type === 'idea' && FORMS[n.form]) {
+        o.form = n.form;
+        const A = (Array.isArray(n.anchors) ? n.anchors : []).slice(0, 48).filter(a => Array.isArray(a) && isFinite(a[0]) && isFinite(a[1])).map(a => [clamp(+a[0], 0, 1), clamp(+a[1], 0, 1)]);
+        o.anchors = A.length ? A : defaultAnchors(o.form);
+      }
       if (o.type === 'idea' && n.layout && typeof n.layout === 'object') {
         const lay = {};
         for (const [k, v] of Object.entries(n.layout).slice(0, 500)) if (Array.isArray(v) && isFinite(v[0]) && isFinite(v[1])) lay[String(k).slice(0, 64)] = v.length > 2 ? [+v[0], +v[1], v[2] ? 1 : 0] : [+v[0], +v[1]];
@@ -513,7 +774,7 @@ function openMap(id) {
   if (editing) commitEdit();
   doc = normalize(d);
   doc.cloud = !!d.cloud; doc.role = d.role || null; doc.dirty = d.dirty || null;
-  currentFolder = null; folderViews = {}; folderSwap = new Map(); updateCrumbs();
+  currentFolder = null; folderViews = {}; folderSwap = new Map(); updateCrumbs(); endAnchorEdit();
   idMap = null;
   past = []; future = [];
   sel.clear(); selWire = null;
@@ -580,7 +841,13 @@ function wirePts(a, b, w) {
 }
 // Fio no estilo do Grasshopper: sai da saída e chega na entrada sempre na horizontal, em curva suave e aberta.
 // Quanto mais "para trás" ou mais desalinhado verticalmente, mais a curva abre (calibrado pelo print do Grasshopper).
+function curveDir(p0, p3) {
+  const d0 = p0.dx !== undefined ? [p0.dx, p0.dy] : [1, 0], d3 = p3.dx !== undefined ? [p3.dx, p3.dy] : [-1, 0];
+  const L = Math.max(40, dist(p0.x, p0.y, p3.x, p3.y) * 0.45);
+  return [p0, { x: p0.x + d0[0] * L, y: p0.y + d0[1] * L }, { x: p3.x + d3[0] * L, y: p3.y + d3[1] * L }, p3];
+}
 function curve(p0, p3) {
+  if (p0.dx !== undefined || p3.dx !== undefined) return curveDir(p0, p3);
   const dx = p3.x - p0.x, ady = Math.abs(p3.y - p0.y);
   const forward = ady > 0 ? Math.min(1, Math.max(0, dx / ady)) : 1; // 1 = bem à frente, 0 = ao lado/atrás
   const d = Math.max(dx >= 0 ? 30 : 80, Math.abs(dx) * 0.9, 0.6 * ady, 1.05 * ady * (1 - forward));
@@ -613,6 +880,11 @@ function hitTest(wx, wy, touch) {
   const gt = Math.max(tol, 6 / view.z);
   const ns = doc.nodes;
   let best = null, bd = Infinity;
+  if (anchorEdit) {
+    const n = anchorNode();
+    if (n) anchorPts(n).forEach((q, idx) => { const d = dist(wx, wy, q.x, q.y); if (d <= Math.max(gt, 9 / view.z) && d < bd) { bd = d; best = { kind: 'anchor', node: n, idx }; } });
+    if (best) return best;
+  }
   // controles de alinhar/distribuir (multisseleção)
   for (const b of alignButtons()) {
     if (Math.abs(wx - b.x) <= b.s / 2 + 1 / view.z && Math.abs(wy - b.y) <= b.s / 2 + 1 / view.z) return { kind: 'align', act: b.act };
@@ -630,7 +902,7 @@ function hitTest(wx, wy, touch) {
   for (let i = ns.length - 1; i >= 0; i--) {
     const n = ns[i];
     if (!hasGrips(n) || isHidden(n)) continue;
-    for (const kind of ['in', 'out']) {
+    for (const kind of isFormed(n) ? ['out'] : ['in', 'out']) {
       ports(n, kind).forEach((p, idx) => {
         const d = dist(wx, wy, p.x, p.y);
         if (d <= gt && d < bd) { bd = d; best = { kind, node: n, idx }; }
@@ -645,7 +917,7 @@ function hitTest(wx, wy, touch) {
     if (['panel', 'image', 'shape'].includes(n.type) && !n.locked && dist(wx, wy, n.x + n.w, n.y + n.h) <= tol + 4 / view.z) return { kind: 'resize', node: n };
     if (WIDE.includes(n.type) && sel.has(n.id) && !n.locked && canEdit() && dist(wx, wy, n.x + n.w - 3 / view.z, n.y + n.h - 3 / view.z) <= tol + 4 / view.z) return { kind: 'width', node: n };
     if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {
-      if (n.inputs) {
+      if (n.inputs && !isFormed(n)) {
         const { lw, rw } = compGeom(n);
         if (n.type === 'link' && n.url && wx >= n.x + n.w - rw - LINK_OPEN && wx <= n.x + n.w - rw) return { kind: 'open', node: n };
         if (wx <= n.x + lw && n.inputs.length) return { kind: 'param', node: n, side: 'in', idx: nearestPort(n, 'in', { y: wy }) };
@@ -679,7 +951,7 @@ function hitTest(wx, wy, touch) {
 // ---------- ZUI: botões + entre os parâmetros quando o zoom está próximo
 const ZUI_ZOOM = 1.3, ZUI_R = 3.6;
 function zuiVisible(n) {
-  return !!n.inputs && !n.locked && !isHidden(n) && !presenting && view.z >= ZUI_ZOOM && (sel.has(n.id) || hoverNode === n) && !(editing && editing.node === n);
+  return !!n.inputs && !isFormed(n) && !anchorEdit && !n.locked && !isHidden(n) && !presenting && view.z >= ZUI_ZOOM && (sel.has(n.id) || hoverNode === n) && !(editing && editing.node === n);
 }
 function zuiButtons(n) {
   const { lw, rw } = compGeom(n);
@@ -940,7 +1212,7 @@ function noShadow(g) { g.shadowColor = 'transparent'; g.shadowBlur = 0; g.shadow
 // desenhado ATRÁS do corpo — só a metade de fora aparece, formando um "C".
 function drawGrips(g, n, edge) {
   const R = 5.2;
-  for (const k of ['in', 'out']) {
+  for (const k of isFormed(n) ? ['out'] : ['in', 'out']) {
     ports(n, k).forEach((p, idx) => {
       const hot = hover && hover.node === n && hover.kind === k && hover.idx === idx;
       g.beginPath();
@@ -1156,6 +1428,7 @@ function drawCheck(g, n, isSel, scale, hideText) {
 }
 
 function drawIdea(g, n, isSel, scale, hideText) {
+  if (isFormed(n)) return drawFormIdea(g, n, isSel, scale, hideText);
   const { S, C, K } = palette(n, isSel);
   drawBody(g, n, C, isSel, scale);
   const { lw, rw } = compGeom(n);
@@ -1276,8 +1549,9 @@ function drawScene(g, o) {
   }
   if (o.zui) { const fc = folderCounts(); if (fc.size) for (const n of doc.nodes) if (n.type === 'idea' && !isHidden(n) && n.id !== currentFolder && fc.get(n.id)) drawFolderBadge(g, n, fc.get(n.id)); }
   if (o.zui && cloud.comments.length) for (const n of doc.nodes) if (n.type !== 'group' && !isHidden(n)) drawCommentBadge(g, n);
-  if (o.zui) for (const n of doc.nodes) if (WIDE.includes(n.type) && selection.has(n.id) && !n.locked && !isHidden(n) && canEdit()) drawWidthGrip(g, n);
+  if (o.zui) for (const n of doc.nodes) if (WIDE.includes(n.type) && selection.has(n.id) && !n.locked && !isHidden(n) && canEdit() && !anchorEdit) drawWidthGrip(g, n);
   if (o.zui) for (const n of doc.nodes) if (zuiVisible(n)) drawZui(g, n);
+  if (o.zui && anchorEdit) drawAnchorEdit(g);
   if (o.zui) drawAlign(g);
 }
 
@@ -1296,6 +1570,7 @@ function draw() {
   if (!doc || !W) return;
   updateGroups(doc.nodes);
   computeHidden();
+  if (anchorEdit && !anchorNode()) endAnchorEdit();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = BG;
   ctx.fillRect(0, 0, W, H);
@@ -1861,7 +2136,11 @@ function positionEditor() {
     s.background = '#fff'; s.color = '#111'; s.caretColor = '#111';
     return;
   }
-  if (type === 'idea') {
+  if (type === 'idea' && isFormed(n)) {
+    const lines = wrap(n.text || ' ', F.idea, textMax(n)).length;
+    w = textMax(n) + 12; h = lines * LH.idea + 8; x = n.x + n.w / 2 - w / 2; y = n.y + n.h * FORM_K[n.form].ty - h / 2;
+    align = 'center'; pt = 4; bg = '#FFFFFF'; color = '#111111';
+  } else if (type === 'idea') {
     x += lw; y += 4; w -= lw + rw; h -= 8; align = 'center';
     const lines = wrap(n.text || ' ', F.idea, textMax(n)).length;
     pt = Math.max(0, (h - lines * LH.idea) / 2);
@@ -2049,7 +2328,7 @@ function moveSet() {
 function resetPointers() {
   clearTimeout(longTimer);
   const g = gesture;
-  if (g && g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width')) changed();
+  if (g && g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor')) changed();
   hideTrash();
   ptrs.clear(); pinch = null; gesture = null;
   render();
@@ -2074,6 +2353,7 @@ canvas.addEventListener('pointerdown', e => {
   const touch = e.pointerType !== 'mouse';
   const g = gesture = { id: e.pointerId, sx: p.x, sy: p.y, wx: w.x, wy: w.y, moved: false, touch, button: e.button, add: e.shiftKey || e.ctrlKey || e.metaKey };
   const h = g.hit = compassHit(p) ? { kind: 'compass' } : hitTest(w.x, w.y, touch);
+  if (anchorEdit && e.button === 0 && h.kind !== 'anchor' && h.kind !== 'compass' && !(h.node && h.node.id === anchorEdit.id)) endAnchorEdit();
   if (e.button === 0 && presenting) { g.mode = 'pan'; g.vx = view.x; g.vy = view.y; g.present = true; return; }
   if (e.button === 0 && tool === 'pen' && canEdit() && h.kind !== 'compass') { g.mode = 'draw'; g.pts = [[w.x, w.y]]; render(); return; }
   if (e.button === 0 && voteMode && h.node && h.node.type !== 'group' && h.kind !== 'compass') { g.mode = 'vote'; return; }
@@ -2092,6 +2372,8 @@ canvas.addEventListener('pointerdown', e => {
   switch (h.kind) {
     case 'out': case 'in':
       g.mode = 'wire'; g.node = h.node; g.side = h.kind; g.idx = h.idx || 0; g.cur = w; break;
+    case 'anchor':
+      g.mode = 'anchor'; g.node = h.node; g.idx = h.idx; break;
     case 'width': {
       g.mode = 'width'; g.node = h.node; g.w0 = h.node.w;
       g.targets = [...sel].map(byId).filter(n => n && WIDE.includes(n.type) && !n.locked && !isHidden(n));
@@ -2129,7 +2411,7 @@ canvas.addEventListener('pointerdown', e => {
         g.cur = w;
       }
   }
-  if (!canEdit() && ['move', 'resize', 'width', 'wire'].includes(g.mode)) g.mode = 'none';
+  if (!canEdit() && ['move', 'resize', 'width', 'anchor', 'wire'].includes(g.mode)) g.mode = 'none';
   updateStatus();
   render();
 });
@@ -2151,7 +2433,7 @@ canvas.addEventListener('pointermove', e => {
     if (Math.hypot(dx, dy) < (g.touch ? 8 : 3)) return;
     g.moved = true;
     clearTimeout(longTimer);
-    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width') checkpoint();
+    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') checkpoint();
   }
   const w = toWorld(p.x, p.y);
   switch (g.mode) {
@@ -2173,6 +2455,11 @@ canvas.addEventListener('pointermove', e => {
       for (const [id, s] of g.starts) { const n = byId(id); if (n) { n.x = s.x + ddx; n.y = s.y + ddy; } }
       broadcastMove(g.starts);
       updateTrash(p, g);
+      break;
+    }
+    case 'anchor': {
+      const n = g.node;
+      if (n.anchors && n.anchors[g.idx]) n.anchors[g.idx] = projectOutline(n, w.x, w.y);
       break;
     }
     case 'width': {
@@ -2225,7 +2512,7 @@ function endPointer(e, cancelled) {
   const w = toWorld(p.x, p.y);
   if (cancelled) {
     hideTrash();
-    if (g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width')) changed();
+    if (g.moved && (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor')) changed();
     return render();
   }
   if (g.mode === 'draw') { finishStroke(g); return; }
@@ -2235,7 +2522,7 @@ function endPointer(e, cancelled) {
   hideTrash();
   if (g.mode === 'move' && g.moved && g.overTrash) { dropInTrash(g); updateStatus(); return; }
   if (g.moved) {
-    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width') changed();
+    if (g.mode === 'move' || g.mode === 'resize' || g.mode === 'width' || g.mode === 'anchor') changed();
     else if (g.mode === 'pan') scheduleSave(true);
     else if (g.mode === 'wire') finishWire(g, w);
   } else if (g.button === 0) {
@@ -2267,14 +2554,14 @@ function updateHover(p) {
   const h = compassHit(p) ? { kind: 'compass' } : hitTest(w.x, w.y, false);
   const hn = h.node || null;
   if (hn !== hoverNode) { hoverNode = hn; if (view.z >= ZUI_ZOOM) render(); }
-  const nh = h.kind === 'in' || h.kind === 'out' ? { node: h.node, kind: h.kind, idx: h.idx } : null;
+  const nh = h.kind === 'in' || h.kind === 'out' || h.kind === 'anchor' ? { node: h.node, kind: h.kind, idx: h.idx } : null;
   if ((nh && (!hover || hover.node !== nh.node || hover.kind !== nh.kind || hover.idx !== nh.idx)) || (!nh && hover)) { hover = nh; render(); }
-  canvas.style.cursor = h.kind === 'in' || h.kind === 'out' ? 'crosshair' : h.kind === 'resize' ? 'nwse-resize' : h.kind === 'width' ? 'ew-resize'
+  canvas.style.cursor = h.kind === 'in' || h.kind === 'out' ? 'crosshair' : h.kind === 'resize' ? 'nwse-resize' : h.kind === 'width' ? 'ew-resize' : h.kind === 'anchor' ? 'grab'
     : h.kind === 'node' ? 'move' : h.kind === 'param' ? 'text' : ['wire', 'open', 'toggle', 'zui', 'align', 'compass'].includes(h.kind) ? 'pointer' : 'default';
   const zuiHint = h.kind === 'zui' ? (h.minus
     ? `Remover ${h.side === 'in' ? 'entrada' : 'saída'} "${portList(h.node, h.side)[h.at]}"`
     : `Acrescentar ${h.side === 'in' ? 'entrada' : 'saída'}`) : null;
-  const hint = zuiHint ? zuiHint : h.kind === 'compass' ? 'Bússola: clique na direção de uma marca para ir até ela · centro: ajustar à tela' : h.kind === 'align' ? ALIGN_LABEL[h.act] : h.kind === 'width' ? 'Arraste para mudar a largura · com várias selecionadas, todas ficam com a mesma largura' : 'Duplo clique no fundo para criar · arraste das bolinhas para conectar';
+  const hint = zuiHint ? zuiHint : h.kind === 'compass' ? 'Bússola: clique na direção de uma marca para ir até ela · centro: ajustar à tela' : h.kind === 'align' ? ALIGN_LABEL[h.act] : h.kind === 'anchor' ? 'Arraste para mover a bolinha pela borda · duplo clique remove' : h.kind === 'width' ? 'Arraste para mudar a largura · com várias selecionadas, todas ficam com a mesma largura' : 'Duplo clique no fundo para criar · arraste das bolinhas para conectar';
   if ($('#stHint').textContent !== hint) $('#stHint').textContent = hint;
   if (tool === 'pen') canvas.style.cursor = 'crosshair';
   else if (voteMode && h.node && h.node.type !== 'group') canvas.style.cursor = 'copy';
@@ -2283,7 +2570,7 @@ function updateHover(p) {
 function startPinch() {
   hideTrash();
   clearTimeout(longTimer);
-  if (gesture && gesture.moved && (gesture.mode === 'move' || gesture.mode === 'resize' || gesture.mode === 'width')) changed();
+  if (gesture && gesture.moved && (gesture.mode === 'move' || gesture.mode === 'resize' || gesture.mode === 'width' || gesture.mode === 'anchor')) changed();
   gesture = null;
   const [a, b] = [...ptrs.values()];
   const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -2331,6 +2618,12 @@ function finishWire(g, w) {
 }
 
 function onDoubleTap(p, w, hit) {
+  const an = anchorEdit && anchorNode();
+  if (an) {
+    if (hit.kind === 'anchor') return removeAnchor(an, hit.idx);
+    const q = projectOutline(an, w.x, w.y);
+    if (dist(w.x, w.y, an.x + q[0] * an.w, an.y + q[1] * an.h) <= 14 / view.z) return addAnchors(an, [q]);
+  }
   if (hit.kind === 'node') { lastDouble = { t: performance.now(), id: hit.node.id }; return startEdit(hit.node); }
   if (hit.kind === 'param') return startEdit(hit.node, false, { side: hit.side, idx: hit.idx });
   if (hit.kind === 'wire') return editWireLabel(hit.wire);
@@ -2458,7 +2751,7 @@ function showMenu(sx, sy, items) {
 }
 // itens de menu para entradas/saídas (renomear, acrescentar, remover)
 function paramItems(n, hit) {
-  if (!n.inputs) return [];
+  if (!n.inputs || isFormed(n)) return [];
   const items = [];
   const side = hit.kind === 'param' ? hit.side : hit.kind === 'in' || hit.kind === 'out' ? hit.kind : null;
   if (side) {
@@ -2479,7 +2772,7 @@ function paramItems(n, hit) {
   return items;
 }
 function openContextMenu(sx, sy, hit, w) {
-  if (['node', 'in', 'out', 'resize', 'width', 'open', 'toggle', 'param', 'zui'].includes(hit.kind)) {
+  if (['node', 'in', 'out', 'resize', 'width', 'anchor', 'open', 'toggle', 'param', 'zui'].includes(hit.kind)) {
     const n = hit.node;
     // no grupo, mantém a seleção atual (para "Adicionar seleção ao grupo")
     if (!sel.has(n.id)) { if (n.type === 'group') sel.add(n.id); else sel = new Set([n.id]); selWire = null; }
@@ -2586,6 +2879,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'Tab') { if (n) e.shiftKey ? addSibling(n) : addChild(n); }
   else if (k === 'Enter') { if (n) n.type === 'idea' ? addSibling(n) : startEdit(n); }
   else if (k === 'F2') { if (n) startEdit(n); }
+  else if (k === 'Escape' && anchorEdit) endAnchorEdit();
   else if (k === 'Escape' && currentFolder && !sel.size && !selWire && tool !== 'pen' && !voteMode) folderUp();
   else if (k === 'Escape') { if (tool === 'pen') togglePen(false); if (voteMode) toggleVote(false); sel.clear(); selWire = null; hideMenus(); render(); updateStatus(); }
   else if (e.altKey) handled = false;
@@ -3261,6 +3555,8 @@ function extraNodeItems(n) {
     items.push({ label: 'Ícone', swatches: ICONS_EMO.slice(0, 5).map(t => ({ text: t, title: t, action: () => setIcon(t) })) });
     items.push({ label: '', swatches: ICONS_EMO.slice(5).map(t => ({ text: t, title: t, action: () => setIcon(t) })) });
     if (n.icon) items.push({ label: 'Remover ícone', action: () => setIcon(null) });
+    items.push({ label: 'Formato', swatches: Object.keys(FORM_ICON).map(k => ({ text: FORM_ICON[k], title: k ? FORMS[k] : 'Padrão (Grasshopper)', action: () => setForm(k) })) });
+    if (isFormed(n)) items.push({ label: '⦿ Editar bolinhas…', action: () => startAnchorEdit(n) });
   }
   if (doc.wires.some(w => w.from === n.id)) {
     items.push({ label: 'Cor do ramo', swatches: BRANCH_COLORS.map(c => ({ color: c, action: () => colorBranch(n, c) })) });
